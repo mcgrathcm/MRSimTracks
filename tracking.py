@@ -21,11 +21,19 @@ class _TetSampler:
     tracking loop rewrites the velocity array each substep, that rebuild fires
     4x per RK4 step. The locator depends only on geometry, which never changes.
 
-    This sampler builds the locator once against a fixed geometry source (whose
-    MTime never changes, so VTK reuses the locator) and recovers the containing
-    cell id per query point via a passed-through cell-data array. Interpolation
-    of the *current* velocity is then a vectorized barycentric weighting in numpy.
-    Falls back to ``None`` (caller uses the generic path) for non-tet meshes.
+    Cell location uses two strategies:
+
+    * Cold path (``locate``) -- a probe whose source geometry never changes, so
+      VTK builds its ``vtkCellTreeLocator`` once and reuses it; the containing
+      cell id comes back as a passed-through cell-data array.
+    * Temporal-coherence walk (``locate``, with a ``guess``) -- particles move
+      far less than a cell per substep, so starting from each particle's previous
+      cell and walking across tet faces toward the query point locates it in ~1-2
+      vectorized iterations, several times faster than a fresh locator query.
+      Particles that leave the domain or fail to converge fall back to the probe.
+
+    Interpolation is a vectorized barycentric weighting using affine transforms
+    precomputed once per cell. Falls back to ``ok=False`` for non-tet meshes.
     """
 
     def __init__(self, mesh):
@@ -37,6 +45,20 @@ class _TetSampler:
         self.conn = mesh.cells.reshape(-1, 5)[:, 1:].copy()
         self.node_xyz = np.asarray(mesh.points)
 
+        # Per-cell affine map xyz -> barycentric: l123 = Minv @ (p - d), where d
+        # is the 4th vertex. Precomputed once so both the walk and interpolation
+        # are matrix-vector products (no per-call linear solve).
+        vx = self.node_xyz[self.conn]                       # (nc, 4, 3)
+        self._d = vx[:, 3, :].copy()                        # (nc, 3)
+        T = np.stack([vx[:, 0] - self._d, vx[:, 1] - self._d,
+                      vx[:, 2] - self._d], axis=2)           # (nc, 3, 3)
+        self._Minv = np.linalg.inv(T)
+
+        # Tet face adjacency: adj[c, i] is the cell sharing the face opposite
+        # local vertex i of cell c (-1 on a domain boundary). Built by matching
+        # faces (sorted node triples) that appear in exactly two cells.
+        self._adj = self._build_adjacency(self.conn, self.node_xyz.shape[0])
+
         # Geometry-only source carrying the cell id as cell data. We never mutate
         # it, so its MTime stays fixed and the probe reuses its built locator.
         geom = pv.UnstructuredGrid()
@@ -45,7 +67,7 @@ class _TetSampler:
         self._geom = geom  # keep a reference alive for the probe
 
         # vtkCellTreeLocator resolves interior-point FindCell ~3.5x faster than
-        # vtkStaticCellLocator on this tet mesh (the dominant cost at scale).
+        # vtkStaticCellLocator on this tet mesh (the cold-path cost at scale).
         probe = vtkProbeFilter()
         probe.SetCellLocatorPrototype(vtkCellTreeLocator())
         probe.SetSourceData(geom)
@@ -54,30 +76,95 @@ class _TetSampler:
         probe.SetPassFieldArrays(False)
         self._probe = probe
 
-    def sample(self, points_xyz, vel):
-        """Return (velocity (n,3), valid mask (n,)) for points in the current field."""
-        points_xyz = np.ascontiguousarray(points_xyz)
-        pd = pv.PolyData(points_xyz)
-        self._probe.SetInputData(pd)
+    @staticmethod
+    def _build_adjacency(conn, n_nodes):
+        nc = conn.shape[0]
+        # face i is opposite local vertex i
+        faces = np.stack([conn[:, [1, 2, 3]], conn[:, [0, 2, 3]],
+                          conn[:, [0, 1, 3]], conn[:, [0, 1, 2]]], axis=1)
+        fs = np.sort(faces, axis=2).reshape(-1, 3)          # (4nc, 3)
+        maxn = n_nodes + 1
+        key = (fs[:, 0].astype(np.int64) * maxn + fs[:, 1]) * maxn + fs[:, 2]
+        cell_id = np.repeat(np.arange(nc), 4)
+        local_f = np.tile(np.arange(4), nc)
+        order = np.argsort(key, kind="stable")
+        ks = key[order]
+        # interior faces appear exactly twice -> consecutive after sorting
+        same = np.where(ks[:-1] == ks[1:])[0]
+        a, b = order[same], order[same + 1]
+        adj = np.full((nc, 4), -1, dtype=np.int32)   # cell ids < 2^31
+        adj[cell_id[a], local_f[a]] = cell_id[b]
+        adj[cell_id[b], local_f[b]] = cell_id[a]
+        return adj
+
+    def _bary(self, points_xyz, cells):
+        """Barycentric weights (n, 4) of points within their given cells."""
+        l123 = np.einsum("nij,nj->ni", self._Minv[cells], points_xyz - self._d[cells])
+        return np.concatenate([l123, 1 - l123.sum(1, keepdims=True)], axis=1)
+
+    def _locate_probe(self, points_xyz):
+        """Cold-path location: returns (cell id, valid mask) via the reused locator."""
+        self._probe.SetInputData(pv.PolyData(np.ascontiguousarray(points_xyz)))
         self._probe.Update()
         out = pv.wrap(self._probe.GetOutput())
-
         cid = np.asarray(out.point_data["cid"])
         valid = np.asarray(out.point_data["vtkValidPointMask"]).astype(bool)
-        cid_safe = np.where(valid, cid, 0)  # invalid -> dummy cell, zeroed below
+        return cid, valid
 
-        nodes = self.conn[cid_safe]          # (n, 4) node ids of containing tet
-        vx = self.node_xyz[nodes]            # (n, 4, 3) tet vertex coords
+    def locate(self, points_xyz, guess=None, tol=1e-10, max_iter=32):
+        """Return the containing cell id per point (-1 if outside the domain).
 
-        # Barycentric coords: solve [a-d, b-d, c-d] @ [l1,l2,l3] = p - d.
-        d = vx[:, 3, :]
-        T = np.stack([vx[:, 0] - d, vx[:, 1] - d, vx[:, 2] - d], axis=2)
-        l123 = np.linalg.solve(T, (points_xyz - d)[..., None])[..., 0]
-        w = np.concatenate([l123, 1 - l123.sum(1, keepdims=True)], axis=1)
+        With ``guess`` (previous cell per particle), walk across tet faces from
+        the guess; otherwise do a full locator query. Particles that exit the
+        domain or do not converge fall back to the locator.
+        """
+        n = points_xyz.shape[0]
+        if guess is None:
+            cid, valid = self._locate_probe(points_xyz)
+            return np.where(valid, cid, -1)
 
-        v = np.einsum("nij,ni->nj", vel[nodes], w)
+        cells = guess.astype(np.int64, copy=True)
+        need_probe = cells < 0           # no usable guess (e.g. reset particles)
+        active = ~need_probe
+        for _ in range(max_iter):
+            idx = np.where(active)[0]
+            if idx.size == 0:
+                break
+            w = self._bary(points_xyz[idx], cells[idx])
+            inside = (w >= -tol).all(axis=1)
+            active[idx[inside]] = False
+            out = idx[~inside]
+            if out.size:
+                # cross the face opposite the most-negative barycentric coord
+                face = np.argmin(w[~inside], axis=1)
+                nb = self._adj[cells[out], face]
+                boundary = nb < 0
+                need_probe[out[boundary]] = True   # left domain -> confirm w/ probe
+                active[out[boundary]] = False
+                cells[out[~boundary]] = nb[~boundary]
+        need_probe[active] = True        # hit max_iter -> confirm w/ probe
+
+        if need_probe.any():
+            pidx = np.where(need_probe)[0]
+            cid_p, valid_p = self._locate_probe(points_xyz[pidx])
+            cells[pidx] = np.where(valid_p, cid_p, -1)
+        return cells
+
+    def sample(self, points_xyz, vel, guess=None):
+        """Return (velocity (n,3), valid (n,), cells (n,)) for points in the field.
+
+        ``cells`` is the resolved containing cell per point (-1 if outside),
+        suitable to feed back as ``guess`` on the next call for the walk.
+        """
+        points_xyz = np.ascontiguousarray(points_xyz)
+        cells = self.locate(points_xyz, guess=guess)
+        valid = cells >= 0
+        cells_safe = np.where(valid, cells, 0)   # dummy cell for invalid; zeroed below
+
+        w = self._bary(points_xyz, cells_safe)
+        v = np.einsum("nij,ni->nj", vel[self.conn[cells_safe]], w)
         v[~valid] = 0.0
-        return v, valid
+        return v, valid, cells
 
 
 
@@ -221,13 +308,13 @@ class timeMeshSingleVTU:
         self.set_active_time(time)
         return points.sample(self.active_mesh, locator=self.locator, pass_cell_data=False, pass_point_data=False, pass_field_data=False)
 
-    def sample_v(self, points_xyz, time):
-        """Fast path: return (velocity (n,3), valid (n,)) numpy arrays."""
+    def sample_v(self, points_xyz, time, guess=None):
+        """Fast path: return (velocity (n,3), valid (n,), cells (n,)) numpy arrays."""
         self.set_active_time(time)
         if not self._sampler.ok:
             return _sample_v_fallback(self, points_xyz, time)
         vel = np.asarray(self.active_mesh.point_data[self.active_key])
-        return self._sampler.sample(points_xyz, vel)
+        return self._sampler.sample(points_xyz, vel, guess=guess)
 
 
 def _sample_v_fallback(flow, points_xyz, time):
@@ -236,7 +323,7 @@ def _sample_v_fallback(flow, points_xyz, time):
     valid = np.asarray(samp["vtkValidPointMask"]).astype(bool)
     v = np.asarray(samp[flow.active_key]).copy()
     v[~valid] = 0.0
-    return v, valid
+    return v, valid, None
 
 
 class timeMeshPVD:
@@ -302,13 +389,13 @@ class timeMeshPVD:
         self.set_active_time(time)
         return points.sample(self.active_mesh, locator=self.locator, pass_cell_data=False, pass_point_data=False, pass_field_data=False)
 
-    def sample_v(self, points_xyz, time):
-        """Fast path: return (velocity (n,3), valid (n,)) numpy arrays."""
+    def sample_v(self, points_xyz, time, guess=None):
+        """Fast path: return (velocity (n,3), valid (n,), cells (n,)) numpy arrays."""
         self.set_active_time(time)
         if not self._sampler.ok:
             return _sample_v_fallback(self, points_xyz, time)
         vel = np.asarray(self.active_mesh.point_data[self.active_key])
-        return self._sampler.sample(points_xyz, vel)
+        return self._sampler.sample(points_xyz, vel, guess=guess)
 
 
 def tracking(flow_mesh, initial_seeds:pv.PolyData, seeding_points:np.ndarray, dt, tmax, method = "RK4", pbar = True, key="velocity", timings=None):
@@ -335,22 +422,26 @@ def tracking(flow_mesh, initial_seeds:pv.PolyData, seeding_points:np.ndarray, dt
     t_sample = 0.0
     t0_loop = time.perf_counter()
 
-    def _sample(points, t):
+    def _sample(points, t, guess):
         nonlocal t_sample, n_samples
         if profile:
             _t = time.perf_counter()
-            out = flow_mesh.sample_v(points, t)
+            out = flow_mesh.sample_v(points, t, guess=guess)
             t_sample += time.perf_counter() - _t
             n_samples += 1
             return out
-        return flow_mesh.sample_v(points, t)
+        return flow_mesh.sample_v(points, t, guess=guess)
+
+    # Per-particle cell guess for the temporal-coherence walk; None on the first
+    # step (cold locator) and reset to -1 for recycled particles (forces a probe).
+    cells = None
 
     pbar = tqdm(range(nstep), disable=not pbar)
 
     for i in pbar:
 
         # Sample current time and position
-        k1, valid = _sample(r, i*dt)
+        k1, valid, cells = _sample(r, i*dt, cells)
 
         # Reset OOB points
         oob = ~valid
@@ -360,10 +451,11 @@ def tracking(flow_mesh, initial_seeds:pv.PolyData, seeding_points:np.ndarray, dt
 
         # Get velocity step
         if method == "RK4":
-
-            k2 = _sample(k1*dt/2 + r, i*dt + dt/2)[0]
-            k3 = _sample(k2*dt/2 + r, i*dt + dt/2)[0]
-            k4 = _sample(k3*dt + r, i*dt + dt)[0]
+            # Substep positions stay within ~1 cell, so reuse the running cell
+            # guess to seed each walk.
+            k2, _, c = _sample(k1*dt/2 + r, i*dt + dt/2, cells)
+            k3, _, c = _sample(k2*dt/2 + r, i*dt + dt/2, c)
+            k4, _, _ = _sample(k3*dt + r, i*dt + dt, c)
 
             v = (k1 + 2*k2 + 2*k3 + k4)/6
         else:
@@ -375,6 +467,10 @@ def tracking(flow_mesh, initial_seeds:pv.PolyData, seeding_points:np.ndarray, dt
         # Move OOB back to inlet
         newpos = seeding_points[np.random.randint(low = 0, high = seeding_points.shape[0], size = (np.sum(oob),)),:]
         r[oob,:] = newpos
+
+        # Recycled particles jumped to the inlet -> their cell guess is stale.
+        if cells is not None:
+            cells[oob] = -1
 
         r_res[i,...] = r
         n_oob = np.sum(oob)
