@@ -1,0 +1,15 @@
+# Python / uv
+.venv/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# Large data and simulation outputs (do not commit)
+*.vtu
+*.vtk
+*.pvd
+*.h5
+*.hdf5
+
+# Benchmark artifacts
+*.json

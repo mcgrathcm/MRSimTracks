@@ -1,0 +1,14 @@
+[project]
+name = "particle-tracking"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "h5py>=3.16.0",
+    "joblib>=1.5.3",
+    "matplotlib>=3.11.0",
+    "numpy>=2.4.6",
+    "pyvista>=0.48.4",
+    "scipy>=1.17.1",
+    "tqdm>=4.68.2",
+    "vtk>=9.6.2",
+]
