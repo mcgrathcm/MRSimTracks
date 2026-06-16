@@ -23,8 +23,10 @@ import pyvista as pv
 
 
 def _frame_velocity(flow, k):
-    """Node velocity array for flow frame index k (handles VTU and PVD meshes)."""
-    if hasattr(flow, "meshes"):                 # timeMeshPVD
+    """Node velocity array for flow frame index k (handles all timeMesh* classes)."""
+    if hasattr(flow, "fields"):                 # timeMeshStaticPVD (one geom + fields)
+        return np.asarray(flow.fields[k])
+    if hasattr(flow, "meshes"):                 # timeMeshPVD (full mesh per frame)
         return np.asarray(flow.meshes[k].point_data[flow.active_key])
     return np.asarray(flow.mesh.point_data[flow._get_mesh_key(k)])  # timeMeshSingleVTU
 

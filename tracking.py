@@ -1,4 +1,6 @@
+import os
 import time
+import xml.etree.ElementTree as ET
 
 import numpy as np
 import pyvista as pv
@@ -542,6 +544,97 @@ class timeMeshPVD:
         return self._sampler.sample(points_xyz, vel, guess=guess)
 
 
+def _parse_pvd(filepath):
+    """Return [(time, vtu_abspath), ...] sorted by time from a .pvd collection."""
+    base = os.path.dirname(os.path.abspath(filepath))
+    root = ET.parse(filepath).getroot()
+    out = [(float(ds.get("timestep")), os.path.join(base, ds.get("file")))
+           for ds in root.iter("DataSet")]
+    out.sort(key=lambda e: e[0])
+    return out
+
+
+class timeMeshStaticPVD:
+    """Time-resolved flow over a STATIC mesh from a .pvd series.
+
+    Unlike ``timeMeshPVD``, which keeps a full mesh copy per timestep (so memory
+    scales as one-mesh-per-frame, with the connectivity duplicated hundreds of
+    times), this stores the geometry once and only the active field per frame --
+    cutting memory from ~one-mesh-per-frame to ~one-field-per-frame (e.g. 430
+    frames of a 1.1M-cell tet mesh: tens of GB -> ~1-2 GB). It assumes the mesh
+    does not change in time (``timeMeshPVD`` already assumes this for its single
+    locator). Only the active field is read from each file (pressure etc. skipped).
+
+    Drop-in for the other timeMesh* classes: same set_active_time / sample /
+    sample_v / get_mesh interface.
+    """
+
+    def __init__(self, filepath, dt=None, active_key="velocity", pbar=True, subsamp=1):
+        entries = _parse_pvd(filepath)
+        self.times = np.array([e[0] for e in entries])
+        files = [e[1] for e in entries]
+        if subsamp > 1:
+            self.times = self.times[::subsamp]
+            files = files[::subsamp]
+        self.active_key = active_key
+
+        # One geometry (from the first frame) + only the active field per frame.
+        self.fields = []
+        geom = None
+        for f in tqdm(files, disable=not pbar):
+            m = _read_vtu(f, active_key, pbar=False)
+            if geom is None:
+                geom = m
+            self.fields.append(np.ascontiguousarray(m.point_data[active_key]))
+
+        self.times_shift_s = self.times - self.times[0]
+        if dt is not None:
+            self.times_shift_s = self.times_shift_s * dt
+        self.tmax = self.times_shift_s.max()
+
+        self.active_mesh = geom
+        self.active_mesh.point_data[self.active_key] = self.fields[0].copy()
+
+        self.locator = vtkStaticCellLocator()
+        self.locator.SetDataSet(self.active_mesh)
+        self.locator.BuildLocator()
+
+        # Fast tet sampler (locator built once, reused across all calls)
+        self._sampler = _TetSampler(self.active_mesh)
+
+    def set_active_time(self, time):
+        time_wrapped = time % self.tmax
+
+        ind_next = np.argmax((self.times_shift_s - time_wrapped) > 0)
+        ind_prev = ind_next - 1
+        weight_next = (time_wrapped - self.times_shift_s[ind_prev]) / (self.times_shift_s[ind_next] - self.times_shift_s[ind_prev])
+
+        tol = 0.001
+
+        if weight_next < tol:
+            self.active_mesh.point_data[self.active_key] = self.fields[ind_prev]
+        elif weight_next > 1 - tol:
+            self.active_mesh.point_data[self.active_key] = self.fields[ind_next]
+        else:
+            self.active_mesh.point_data[self.active_key] = (1 - weight_next)*self.fields[ind_prev] + weight_next*self.fields[ind_next]
+
+    def get_mesh(self, time):
+        self.set_active_time(time)
+        return self.active_mesh
+
+    def sample(self, points:pv.PolyData, time):
+        self.set_active_time(time)
+        return points.sample(self.active_mesh, locator=self.locator, pass_cell_data=False, pass_point_data=False, pass_field_data=False)
+
+    def sample_v(self, points_xyz, time, guess=None):
+        """Fast path: return (velocity (n,3), valid (n,), cells (n,)) numpy arrays."""
+        self.set_active_time(time)
+        if not self._sampler.ok:
+            return _sample_v_fallback(self, points_xyz, time)
+        vel = np.asarray(self.active_mesh.point_data[self.active_key])
+        return self._sampler.sample(points_xyz, vel, guess=guess)
+
+
 def tracking(flow_mesh, initial_seeds:pv.PolyData, seeding_points:np.ndarray, dt, tmax, method = "RK4", pbar = True, key="velocity", timings=None, reseeder=None):
     # Pass a dict as `timings` to collect a wall-time breakdown of the loop.
     # It is filled in place (non-breaking: the 3-tuple return is unchanged).
@@ -648,13 +741,16 @@ def tracking(flow_mesh, initial_seeds:pv.PolyData, seeding_points:np.ndarray, dt
 
     return r_res, m_reset_flag, oob_loc_list
 
-def tracking_parallel(fn, seeds, inlet, dt, tmax, method = "RK4", active_key="velocity", pbar = False, dt_pvd = None, only_active_key=True, caps=None):
+def tracking_parallel(fn, seeds, inlet, dt, tmax, method = "RK4", active_key="velocity", pbar = False, dt_pvd = None, only_active_key=True, caps=None, static_pvd=True):
     # Tracking only ever reads active_key, so skip pressure (etc.) by default to
     # speed up the per-worker reload and cut memory.
     if fn.split(".")[-1] == "vtu":
         flow = timeMeshSingleVTU(fn, active_key=active_key, pbar=pbar, only_active_key=only_active_key)
     elif fn.split(".")[-1] == "pvd":
-        flow = timeMeshPVD(fn, active_key=active_key, pbar=pbar, dt=dt_pvd)
+        # static_pvd: store one geometry + per-frame fields (memory-efficient).
+        # Set False to fall back to the full-mesh-per-frame timeMeshPVD.
+        cls = timeMeshStaticPVD if static_pvd else timeMeshPVD
+        flow = cls(fn, active_key=active_key, pbar=pbar, dt=dt_pvd)
 
     # `caps` (path or labeled surface) enables backflow-aware inflow reseeding.
     # Built per worker since the reseeder samples this worker's own flow field.
