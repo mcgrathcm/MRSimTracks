@@ -13,3 +13,6 @@ __pycache__/
 
 # Benchmark artifacts
 *.json
+
+# Generated surface fixtures
+*.vtp

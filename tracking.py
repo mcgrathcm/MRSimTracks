@@ -542,9 +542,13 @@ class timeMeshPVD:
         return self._sampler.sample(points_xyz, vel, guess=guess)
 
 
-def tracking(flow_mesh, initial_seeds:pv.PolyData, seeding_points:np.ndarray, dt, tmax, method = "RK4", pbar = True, key="velocity", timings=None):
+def tracking(flow_mesh, initial_seeds:pv.PolyData, seeding_points:np.ndarray, dt, tmax, method = "RK4", pbar = True, key="velocity", timings=None, reseeder=None):
     # Pass a dict as `timings` to collect a wall-time breakdown of the loop.
     # It is filled in place (non-breaking: the 3-tuple return is unchanged).
+    #
+    # reseeder: optional object with reseed(n, t) -> (n, 3); when given, OOB
+    # particles are recycled to currently-inflow boundary faces (handles
+    # backflow) instead of uniformly to the static `seeding_points`.
 
     nstep = int(tmax/dt)
 
@@ -608,8 +612,13 @@ def tracking(flow_mesh, initial_seeds:pv.PolyData, seeding_points:np.ndarray, dt
         # Advect
         r = r + v*dt
 
-        # Move OOB back to inlet
-        newpos = seeding_points[np.random.randint(low = 0, high = seeding_points.shape[0], size = (np.sum(oob),)),:]
+        # Move OOB back to the inlet. With a reseeder, recycle to currently-inflow
+        # boundary faces (backflow-aware); otherwise draw from the static cloud.
+        n_reset = int(np.sum(oob))
+        if reseeder is not None:
+            newpos = reseeder.reseed(n_reset, i*dt)
+        else:
+            newpos = seeding_points[np.random.randint(low = 0, high = seeding_points.shape[0], size = (n_reset,)),:]
         r[oob,:] = newpos
 
         # Recycled particles jumped to the inlet -> their cell guess is stale.
@@ -639,7 +648,7 @@ def tracking(flow_mesh, initial_seeds:pv.PolyData, seeding_points:np.ndarray, dt
 
     return r_res, m_reset_flag, oob_loc_list
 
-def tracking_parallel(fn, seeds, inlet, dt, tmax, method = "RK4", active_key="velocity", pbar = False, dt_pvd = None, only_active_key=True):
+def tracking_parallel(fn, seeds, inlet, dt, tmax, method = "RK4", active_key="velocity", pbar = False, dt_pvd = None, only_active_key=True, caps=None):
     # Tracking only ever reads active_key, so skip pressure (etc.) by default to
     # speed up the per-worker reload and cut memory.
     if fn.split(".")[-1] == "vtu":
@@ -647,7 +656,14 @@ def tracking_parallel(fn, seeds, inlet, dt, tmax, method = "RK4", active_key="ve
     elif fn.split(".")[-1] == "pvd":
         flow = timeMeshPVD(fn, active_key=active_key, pbar=pbar, dt=dt_pvd)
 
-    r_res, m_reset_flag, oob_loc_list = tracking(flow, pv.PolyData(seeds), inlet, dt, tmax, method=method, pbar = pbar, key=active_key)
+    # `caps` (path or labeled surface) enables backflow-aware inflow reseeding.
+    # Built per worker since the reseeder samples this worker's own flow field.
+    reseeder = None
+    if caps is not None:
+        from reseeding import BoundaryReseeder
+        reseeder = BoundaryReseeder(caps, flow)
+
+    r_res, m_reset_flag, oob_loc_list = tracking(flow, pv.PolyData(seeds), inlet, dt, tmax, method=method, pbar = pbar, key=active_key, reseeder=reseeder)
 
     return r_res, m_reset_flag, oob_loc_list
 
