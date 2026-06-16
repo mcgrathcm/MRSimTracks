@@ -16,3 +16,6 @@ __pycache__/
 
 # Generated surface fixtures
 *.vtp
+
+# macOS
+.DS_Store
