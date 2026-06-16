@@ -31,10 +31,13 @@ def extract_caps(flow_file, out="caps_labeled.vtp", vmag_thresh=0.5, min_faces=2
         v = full.point_data[f"{flow.active_key}_{t:05d}"][orig]
         vmax = np.maximum(vmax, np.linalg.norm(v, axis=1))
 
-    # a face is a cap face if all three of its nodes carry flow
+    # a face is a cap face if any of its nodes carries flow -- this keeps the
+    # rim ring of faces straddling the cap/wall edge (one or two no-slip nodes),
+    # which still carry real flux through their interior. Mirrors a user-provided
+    # cap, where every face is a reseeding candidate regardless of nodal values.
     faces = surf.faces.reshape(-1, 4)[:, 1:]
     cap_node = vmax > vmag_thresh
-    cap_face = cap_node[faces].all(axis=1)
+    cap_face = cap_node[faces].any(axis=1)
     print(f"{surf.n_cells} boundary faces -> {cap_face.sum()} cap faces "
           f"({cap_node.sum()} cap nodes of {surf.n_points})")
 

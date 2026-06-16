@@ -31,17 +31,23 @@ def _frame_velocity(flow, k):
 
 class BoundaryReseeder:
     def __init__(self, caps, flow, rng=None, region_key="region_id",
-                 inward_eps=None, verify=True):
+                 inward_eps=None, dt=None, verify=True):
         """
         caps : pv.PolyData with a per-cell ``region_key`` array, a path to such a
                file, or a list of surface meshes/paths (one cap each).
         flow : a timeMesh* object exposing an all-tet ``_sampler``.
-        inward_eps : distance to offset seed points inside the domain along the
-               inward normal. Defaults to ~half the median cap edge length.
+        inward_eps : minimum distance to offset seed points inside the domain
+               along the inward normal. Defaults to ~half the median cap edge.
+        dt : tracking time step. When given, seeds are spread over a random
+               inward depth (a thin inflow *volume*) instead of a single plane,
+               so successive per-step reseeds overlap rather than forming
+               advecting density stripes -- important for uniform-density MR use.
+               When None, a fixed ``inward_eps`` offset is used (plane seeding).
         """
         self.flow = flow
         self.rng = rng if rng is not None else np.random.default_rng()
         self.region_key = region_key
+        self.dt = dt
         self.verify = verify
         if not getattr(flow, "_sampler", None) or not flow._sampler.ok:
             raise ValueError("BoundaryReseeder requires an all-tetrahedral flow mesh")
@@ -60,6 +66,10 @@ class BoundaryReseeder:
         self.area = 0.5 * np.linalg.norm(cross, axis=1)
         unit = cross / (np.linalg.norm(cross, axis=1, keepdims=True) + 1e-30)
         centroid = self._a + (self._e1 + self._e2) / 3.0
+        # per-face characteristic length (mean edge) -> minimum seed-layer depth
+        self._charlen = (np.linalg.norm(self._e1, axis=1)
+                         + np.linalg.norm(self._e2, axis=1)
+                         + np.linalg.norm(self._e2 - self._e1, axis=1)) / 3.0
 
         if inward_eps is None:
             inward_eps = 0.5 * np.median(np.linalg.norm(self._e1, axis=1))
@@ -146,8 +156,19 @@ class BoundaryReseeder:
         over = r1 + r2 > 1.0
         r1[over] = 1.0 - r1[over]
         r2[over] = 1.0 - r2[over]
-        p = (self._a[f] + r1[:, None] * self._e1[f] + r2[:, None] * self._e2[f]
-             - self.inward_eps * self.normal[f])
+        p_surf = self._a[f] + r1[:, None] * self._e1[f] + r2[:, None] * self._e2[f]
+
+        # Offset inward. With dt, randomize the depth over a layer thick enough
+        # that consecutive reseeds overlap: a particle penetrates ~v_n*dt per
+        # step, so spreading new seeds over U(0, max(v_n*dt, cell)) makes discrete
+        # plane seeding equivalent to continuous volumetric inflow (no striping).
+        if self.dt is not None:
+            vn_in = np.maximum(-self._vn[k][f], 0.0)          # inflow normal speed
+            layer = np.maximum(vn_in * self.dt, self._charlen[f])
+            depth = self.inward_eps + self.rng.random(n) * layer
+        else:
+            depth = np.full(n, self.inward_eps)
+        p = p_surf - depth[:, None] * self.normal[f]
 
         if self.verify:
             cells = self.flow._sampler.locate(np.ascontiguousarray(p), guess=None)

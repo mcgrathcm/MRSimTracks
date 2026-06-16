@@ -661,7 +661,8 @@ def tracking_parallel(fn, seeds, inlet, dt, tmax, method = "RK4", active_key="ve
     reseeder = None
     if caps is not None:
         from reseeding import BoundaryReseeder
-        reseeder = BoundaryReseeder(caps, flow)
+        # dt enables the volumetric inflow layer (avoids density striping).
+        reseeder = BoundaryReseeder(caps, flow, dt=dt)
 
     r_res, m_reset_flag, oob_loc_list = tracking(flow, pv.PolyData(seeds), inlet, dt, tmax, method=method, pbar = pbar, key=active_key, reseeder=reseeder)
 
