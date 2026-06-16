@@ -741,7 +741,7 @@ def tracking(flow_mesh, initial_seeds:pv.PolyData, seeding_points:np.ndarray, dt
 
     return r_res, m_reset_flag, oob_loc_list
 
-def tracking_parallel(fn, seeds, inlet, dt, tmax, method = "RK4", active_key="velocity", pbar = False, dt_pvd = None, only_active_key=True, caps=None, static_pvd=True):
+def tracking_parallel(fn, seeds, inlet, dt, tmax, method = "RK4", active_key="velocity", pbar = False, dt_pvd = None, only_active_key=True, caps=None, static_pvd=True, subsamp=1):
     # Tracking only ever reads active_key, so skip pressure (etc.) by default to
     # speed up the per-worker reload and cut memory.
     if fn.split(".")[-1] == "vtu":
@@ -750,13 +750,13 @@ def tracking_parallel(fn, seeds, inlet, dt, tmax, method = "RK4", active_key="ve
         # static_pvd: store one geometry + per-frame fields (memory-efficient).
         # Set False to fall back to the full-mesh-per-frame timeMeshPVD.
         cls = timeMeshStaticPVD if static_pvd else timeMeshPVD
-        flow = cls(fn, active_key=active_key, pbar=pbar, dt=dt_pvd)
+        flow = cls(fn, active_key=active_key, pbar=pbar, dt=dt_pvd, subsamp=subsamp)
 
     # `caps` (path or labeled surface) enables backflow-aware inflow reseeding.
     # Built per worker since the reseeder samples this worker's own flow field.
     reseeder = None
     if caps is not None:
-        from reseeding import BoundaryReseeder
+        from .reseeding import BoundaryReseeder
         # dt enables the volumetric inflow layer (avoids density striping).
         reseeder = BoundaryReseeder(caps, flow, dt=dt)
 

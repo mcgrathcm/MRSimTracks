@@ -16,7 +16,7 @@ array (0..n_caps-1), saved to caps_labeled.vtp.
 import numpy as np
 import pyvista as pv
 
-import tracking
+from . import tracking
 
 
 def extract_caps(flow_file, out="caps_labeled.vtp", vmag_thresh=0.5, min_faces=20):
