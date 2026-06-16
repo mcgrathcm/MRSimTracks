@@ -20,7 +20,7 @@ import time
 import numpy as np
 import pyvista as pv
 
-import tracking
+from particle_tracking import tracking
 
 
 def _fmt(n):

@@ -13,3 +13,11 @@ __pycache__/
 
 # Benchmark artifacts
 *.json
+
+# Generated surface fixtures
+*.vtp
+
+# macOS
+.DS_Store
+*.png
+*.gif
