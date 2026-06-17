@@ -44,6 +44,15 @@ uv build
 The wheel and source distribution intentionally exclude `.vtu` and `.vtp` data
 fixtures. Those files are repository test assets, not package data.
 
+## Docs
+
+Build the documentation locally with:
+
+```bash
+uv sync --group docs
+uv run --group docs mkdocs build --strict
+```
+
 ## Data Policy
 
 - Keep generated outputs, exploratory data, and scratch files under `ignore/`.

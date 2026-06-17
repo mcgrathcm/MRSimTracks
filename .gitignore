@@ -8,6 +8,7 @@ dist/
 coverage.xml
 htmlcov/
 release-metrics/
+site/
 
 # Local scratch data moved out of the publishable repo surface
 ignore/

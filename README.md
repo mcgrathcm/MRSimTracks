@@ -100,6 +100,17 @@ uv run pytest -m large
 
 See `CONTRIBUTING.md` for the full development workflow.
 
+## Documentation
+
+Documentation is built with MkDocs:
+
+```bash
+uv sync --group docs
+uv run --group docs mkdocs build --strict
+```
+
+The GitHub Pages site is deployed from `main`.
+
 ## Notes
 
 - Flow meshes are assumed all-tetrahedral and static in time (the field varies,
