@@ -11,7 +11,7 @@ exclude = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["particle_tracking"]
+packages = ["mrsimtracks"]
 
 [project]
 name = "mrsimtracks"
@@ -78,5 +78,5 @@ markers = [
 
 [tool.coverage.run]
 omit = [
-    "particle_tracking/caps.py",
+    "mrsimtracks/dev/caps.py",
 ]

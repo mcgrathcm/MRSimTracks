@@ -27,7 +27,7 @@ jobs:
         run: uv sync --group dev
 
       - name: Run normal test suite
-        run: uv run pytest -m "not large" --cov=particle_tracking --cov-report=term-missing
+        run: uv run pytest -m "not large" --cov=mrsimtracks --cov-report=term-missing
 
       - name: Build package
         run: uv build

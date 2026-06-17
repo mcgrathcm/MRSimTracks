@@ -1,14 +1,18 @@
 # Quick Start
 
 ```python
-import particle_tracking as pt
+import numpy as np
 
-flow = pt.load_flow("case.pvd", active_key="Velocity")
-reseeder = pt.BoundaryReseeder(["Inlet.vtp", "Outlet.vtp"], flow, dt=0.002)
+import mrsimtracks as mt
+from mrsimtracks.seeding import seed_mesh
 
-result = pt.track(
+flow = mt.load_flow("case.pvd", active_key="Velocity")
+reseeder = mt.BoundaryReseeder(["Inlet.vtp", "Outlet.vtp"], flow, dt=0.002)
+seeds = seed_mesh(flow.active_mesh, 200_000, rng=np.random.default_rng(0))
+
+result = mt.track(
     flow,
-    n_particles=200_000,
+    seeds=seeds,
     dt=0.002,
     reseeder=reseeder,
 )
@@ -27,9 +31,9 @@ The saved HDF5 file contains:
 For larger runs:
 
 ```python
-result = pt.track_parallel(
+result = mt.track_parallel(
     "case.pvd",
-    n_particles=2_000_000,
+    seeds=seeds,
     dt=0.002,
     caps=["Inlet.vtp", "Outlet.vtp"],
     active_key="Velocity",

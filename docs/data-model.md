@@ -22,7 +22,9 @@ The current fast path assumes:
 Boundary reseeding uses user-provided cap surfaces from the CFD setup:
 
 ```python
-reseeder = pt.BoundaryReseeder(["Inlet.vtp", "Outlet.vtp"], flow, dt=0.002)
+import mrsimtracks as mt
+
+reseeder = mt.BoundaryReseeder(["Inlet.vtp", "Outlet.vtp"], flow, dt=0.002)
 ```
 
 A list of surfaces is interpreted as one cap per file. A single labeled surface

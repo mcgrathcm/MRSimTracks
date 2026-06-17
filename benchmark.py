@@ -20,7 +20,8 @@ import time
 import numpy as np
 import pyvista as pv
 
-from particle_tracking import tracking
+from mrsimtracks.core import tracking
+from mrsimtracks.io import timeMeshSingleVTU
 
 
 def _fmt(n):
@@ -70,8 +71,8 @@ def bench_tracking(flow, inlet, counts, nsteps, dt, method, rng):
     for n in counts:
         seeds = make_particles(flow, n, rng)
         timings = {}
-        tracking.tracking(flow, seeds, inlet, dt, tmax=nsteps * dt,
-                          method=method, pbar=False, timings=timings)
+        tracking(flow, seeds, inlet, dt, tmax=nsteps * dt,
+                 method=method, pbar=False, timings=timings)
         mpstep = timings["particle_steps_per_s"] / 1e6
         print(f"{_fmt(n):>12} {timings['s_per_step']*1e3:>10.2f} {mpstep:>10.3f} "
               f"{timings['sample_frac']*100:>8.1f}% {timings['n_sample_calls']/nsteps:>11.1f}")
@@ -102,7 +103,7 @@ def main():
 
     print(f"flow file: {args.flow}")
     t0 = time.perf_counter()
-    flow = tracking.timeMeshSingleVTU(args.flow)
+    flow = timeMeshSingleVTU(args.flow)
     t_load = time.perf_counter() - t0
     print(f"load: {t_load:.1f}s | {flow.mesh.n_points:,} points | "
           f"{flow.mesh.n_cells:,} cells | {len(flow.times)} timesteps")

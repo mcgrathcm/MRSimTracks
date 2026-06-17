@@ -1,8 +1,8 @@
-"""Extract labeled inlet/outlet cap patches from a CFD volume mesh.
+"""Development helper for extracting labeled inlet/outlet cap patches.
 
-Development fixture for the inflow-reseeding feature: the real workflow will use
-boundary surfaces exported (named) from the CFD setup. Until those exist, this
-reconstructs equivalent labeled caps from the volume file.
+This is not the recommended production workflow. MRSimTracks expects users to
+provide cap surfaces exported from the CFD setup. This helper exists for
+development and exploratory cases where such surfaces are unavailable.
 
 How it works: viscous no-slip walls have velocity ~0 on the boundary, while
 inlet/outlet caps carry flow. Taking the max |velocity| over all time frames at
@@ -16,7 +16,7 @@ array (0..n_caps-1), saved to caps_labeled.vtp.
 import numpy as np
 import pyvista as pv
 
-from .tracking import timeMeshSingleVTU
+from ..io import timeMeshSingleVTU
 
 
 def extract_caps(flow_file, out="caps_labeled.vtp", vmag_thresh=0.5, min_faces=20,

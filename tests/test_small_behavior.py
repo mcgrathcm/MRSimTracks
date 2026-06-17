@@ -2,7 +2,7 @@ from pathlib import Path
 
 import numpy as np
 
-import particle_tracking as pt
+import mrsimtracks as pt
 from diagnostics import (
     density_stats,
     deterministic_cell_center_seeds,

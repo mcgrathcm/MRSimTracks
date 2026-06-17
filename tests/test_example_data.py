@@ -3,7 +3,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-import particle_tracking as pt
+import mrsimtracks as pt
 
 
 DATA = Path(__file__).parent / "data"

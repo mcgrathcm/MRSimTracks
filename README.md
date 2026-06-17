@@ -14,22 +14,25 @@ boundaries with optional **backflow-aware** reseeding.
 uv sync          # installs the package (editable) and dependencies
 ```
 
-The distribution name is `mrsimtracks`; the Python import package is currently
-`particle_tracking`.
+The distribution name and Python import package are both `mrsimtracks`.
 
 ## Quick start
 
 ```python
-import particle_tracking as pt
+import numpy as np
+
+import mrsimtracks as mt
+from mrsimtracks.seeding import seed_mesh
 
 # 1. Load a time-resolved flow field (.vtu single-file series or .pvd collection)
-flow = pt.load_flow("case.pvd", active_key="Velocity")
+flow = mt.load_flow("case.pvd", active_key="Velocity")
 
 # 2. (optional) Backflow-aware inflow reseeder from labeled cap surfaces
-reseeder = pt.BoundaryReseeder(["Inlet.vtp", "Outlet.vtp"], flow, dt=0.002)
+reseeder = mt.BoundaryReseeder(["Inlet.vtp", "Outlet.vtp"], flow, dt=0.002)
 
-# 3. Track (seeds the volume, advects, recycles to inflow caps)
-result = pt.track(flow, n_particles=2e5, dt=0.002, reseeder=reseeder)
+# 3. Seed and track
+seeds = seed_mesh(flow.active_mesh, 200_000, rng=np.random.default_rng(0))
+result = mt.track(flow, seeds=seeds, dt=0.002, reseeder=reseeder)
 
 # 4. Use / save
 result.positions      # (n_steps, n_particles, 3)
@@ -46,8 +49,8 @@ example flow file is not tracked in normal Git; see `example/README.md`.
 Each worker reloads the field, so memory scales with `n_workers`:
 
 ```python
-result = pt.track_parallel(
-    "case.pvd", n_particles=2e6, dt=0.002,
+result = mt.track_parallel(
+    "case.pvd", seeds=seeds, dt=0.002,
     caps=["Inlet.vtp", "Outlet.vtp"], active_key="Velocity",
     n_workers=3, subsamp=1,
 )
@@ -58,10 +61,9 @@ result = pt.track_parallel(
 | Function | Purpose |
 |---|---|
 | `load_flow(path, active_key=...)` | Load `.vtu` (one geometry, many time fields) or `.pvd` (series); auto-selects the memory-efficient reader. `subsamp=N` keeps every Nth frame. |
-| `track(flow, n_particles=..., dt=..., reseeder=...)` | Single-process tracking → `TrackingResult`. |
+| `track(flow, seeds=..., dt=..., reseeder=...)` | Single-process tracking → `TrackingResult`. |
 | `track_parallel(path, ..., caps=..., n_workers=...)` | Multi-process tracking → `TrackingResult`. |
 | `BoundaryReseeder(caps, flow, dt=...)` | Flux-weighted, time-resolved inflow reseeder. `caps` = cap surface path(s) or a surface with a `region_id` cell array. |
-| `extract_caps("case.vtu", active_key="Velocity")` | Reconstruct labeled inlet/outlet caps from a volume mesh when none are provided (uses the no-slip-wall signal: walls have v≈0, caps carry flow). |
 
 ## Reseeding notes
 
@@ -87,7 +89,7 @@ Normal CI runs against a reduced real-data fixture:
 
 ```bash
 uv sync --group dev
-uv run pytest -m "not large" --cov=particle_tracking --cov-report=term-missing
+uv run pytest -m "not large" --cov=mrsimtracks --cov-report=term-missing
 ```
 
 Full-data validation uses the Git LFS example file and runs only for release
@@ -115,9 +117,8 @@ The GitHub Pages site is deployed from `main`.
 
 - Flow meshes are assumed all-tetrahedral and static in time (the field varies,
   the geometry does not).
-- `timeMeshStaticPVD` stores one geometry + one field per frame, so a long `.pvd`
-  series fits in a few GB instead of tens; `timeMeshPVD` (full mesh per frame) is
-  retained for reference.
+- `.pvd` loading stores one geometry plus one field per frame for static-mesh
+  series, so long time series fit in a few GB instead of tens.
 
 ## License
 

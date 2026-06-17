@@ -21,9 +21,8 @@ workflow is:
 
 ## Import Name
 
-The package distribution is named `mrsimtracks`. The Python import package is
-currently:
+The package distribution and Python import package are both `mrsimtracks`:
 
 ```python
-import particle_tracking as pt
+import mrsimtracks as mt
 ```

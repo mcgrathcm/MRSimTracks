@@ -19,7 +19,9 @@ Pass the tracking time step to spread reseeded particles over a thin inward
 layer:
 
 ```python
-reseeder = pt.BoundaryReseeder(caps, flow, dt=dt)
+import mrsimtracks as mt
+
+reseeder = mt.BoundaryReseeder(caps, flow, dt=dt)
 ```
 
 This reduces repeated plane-seeding artifacts and helps maintain smoother

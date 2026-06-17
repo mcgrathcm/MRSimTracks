@@ -8,7 +8,7 @@ Normal CI runs on pull requests and pushes to `main`. It uses the reduced
 fixture in `tests/data/` and does not fetch Git LFS data:
 
 ```bash
-uv run pytest -m "not large" --cov=particle_tracking --cov-report=term-missing
+uv run pytest -m "not large" --cov=mrsimtracks --cov-report=term-missing
 ```
 
 These tests check:

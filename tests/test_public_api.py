@@ -2,18 +2,16 @@ import h5py
 import numpy as np
 import pytest
 
-import particle_tracking as pt
+import mrsimtracks as pt
 
 
 def test_public_api_exports_expected_names():
     expected = {
         "load_flow",
-        "seed_volume",
         "track",
         "track_parallel",
         "TrackingResult",
         "BoundaryReseeder",
-        "extract_caps",
     }
 
     assert expected <= set(pt.__all__)
@@ -27,8 +25,8 @@ def test_load_flow_rejects_unsupported_extension():
 
 
 def test_track_requires_seeds_or_particle_count():
-    with pytest.raises(ValueError, match="provide either seeds or n_particles"):
-        pt.track(flow=None, pbar=False)
+    with pytest.raises(ValueError, match="provide seeds"):
+        pt.track(flow=None, seeds=None, pbar=False)
 
 
 def test_tracking_result_save_writes_expected_hdf5_schema(tmp_path):
