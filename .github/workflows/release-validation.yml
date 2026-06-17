@@ -30,4 +30,14 @@ jobs:
         run: uv sync --group dev
 
       - name: Run full-data validation
+        env:
+          MRSIMTRACKS_METRICS_DIR: release-metrics
         run: uv run pytest -m large
+
+      - name: Upload validation metrics
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: release-validation-metrics
+          path: release-metrics/*.json
+          if-no-files-found: warn
