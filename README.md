@@ -76,6 +76,25 @@ Sampling reuses a cell-tree locator built once, a temporal-coherence tet walk
 (numba) seeded from each particle's previous cell, and fused walk+interpolation.
 `benchmark.py` measures sampling and tracking throughput.
 
+## Development
+
+Normal CI runs against a reduced real-data fixture:
+
+```bash
+uv sync --group dev
+uv run pytest -m "not large"
+```
+
+Full-data validation uses the Git LFS example file and runs only for release
+validation:
+
+```bash
+git lfs pull --include="example/CFD_velocity.vtu"
+uv run pytest -m large
+```
+
+See `CONTRIBUTING.md` for the full development workflow.
+
 ## Notes
 
 - Flow meshes are assumed all-tetrahedral and static in time (the field varies,
