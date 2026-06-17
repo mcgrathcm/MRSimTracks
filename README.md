@@ -33,7 +33,8 @@ result.times          # (n_steps,)
 result.save("tracks.h5")
 ```
 
-Run `example.py` for a complete, runnable version.
+Run `example.py` for a complete version using local example data. The large
+example flow file is not tracked in normal Git; see `example/README.md`.
 
 ## Large runs (multiple processes)
 
@@ -55,7 +56,7 @@ result = pt.track_parallel(
 | `track(flow, n_particles=..., dt=..., reseeder=...)` | Single-process tracking → `TrackingResult`. |
 | `track_parallel(path, ..., caps=..., n_workers=...)` | Multi-process tracking → `TrackingResult`. |
 | `BoundaryReseeder(caps, flow, dt=...)` | Flux-weighted, time-resolved inflow reseeder. `caps` = cap surface path(s) or a surface with a `region_id` cell array. |
-| `extract_caps("case.vtu")` | Reconstruct labeled inlet/outlet caps from a volume mesh when none are provided (uses the no-slip-wall signal: walls have v≈0, caps carry flow). |
+| `extract_caps("case.vtu", active_key="Velocity")` | Reconstruct labeled inlet/outlet caps from a volume mesh when none are provided (uses the no-slip-wall signal: walls have v≈0, caps carry flow). |
 
 ## Reseeding notes
 
@@ -82,3 +83,7 @@ Sampling reuses a cell-tree locator built once, a temporal-coherence tet walk
 - `timeMeshStaticPVD` stores one geometry + one field per frame, so a long `.pvd`
   series fits in a few GB instead of tens; `timeMeshPVD` (full mesh per frame) is
   retained for reference.
+
+## License
+
+MIT.

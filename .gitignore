@@ -3,6 +3,10 @@
 __pycache__/
 *.pyc
 .ipynb_checkpoints/
+dist/
+
+# Local scratch data moved out of the publishable repo surface
+ignore/
 
 # Large data and simulation outputs (do not commit)
 *.vtu
@@ -10,12 +14,16 @@ __pycache__/
 *.pvd
 *.h5
 *.hdf5
+!example/CFD_velocity.vtu
+!tests/data/*.vtu
 
 # Benchmark artifacts
 *.json
 
 # Generated surface fixtures
 *.vtp
+!example/*.vtp
+!tests/data/*.vtp
 
 # macOS
 .DS_Store

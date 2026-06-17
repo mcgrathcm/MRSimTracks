@@ -16,13 +16,14 @@ array (0..n_caps-1), saved to caps_labeled.vtp.
 import numpy as np
 import pyvista as pv
 
-from . import tracking
+from .tracking import timeMeshSingleVTU
 
 
-def extract_caps(flow_file, out="caps_labeled.vtp", vmag_thresh=0.5, min_faces=20):
-    flow = tracking.timeMeshSingleVTU(flow_file, only_active_key=True)
+def extract_caps(flow_file, out="caps_labeled.vtp", vmag_thresh=0.5, min_faces=20,
+                 active_key="velocity"):
+    flow = timeMeshSingleVTU(flow_file, active_key=active_key, only_active_key=True)
     full = flow.mesh
-    surf = full.extract_surface().triangulate()
+    surf = full.extract_surface(algorithm="dataset_surface").triangulate()
     orig = surf.point_data["vtkOriginalPointIds"]
 
     # max |velocity| over all frames at each boundary node (walls stay ~0)
@@ -42,7 +43,8 @@ def extract_caps(flow_file, out="caps_labeled.vtp", vmag_thresh=0.5, min_faces=2
           f"({cap_node.sum()} cap nodes of {surf.n_points})")
 
     # split the cap faces into separate connected patches
-    caps = surf.extract_cells(np.where(cap_face)[0]).extract_surface()
+    caps = surf.extract_cells(np.where(cap_face)[0]).extract_surface(
+        algorithm="dataset_surface")
     caps = caps.connectivity("all")
     region = np.asarray(caps.cell_data["RegionId"])
 
@@ -50,7 +52,8 @@ def extract_caps(flow_file, out="caps_labeled.vtp", vmag_thresh=0.5, min_faces=2
     keep_ids, counts = np.unique(region, return_counts=True)
     keep_ids = keep_ids[counts >= min_faces]
     mask = np.isin(region, keep_ids)
-    caps = caps.extract_cells(np.where(mask)[0]).extract_surface()
+    caps = caps.extract_cells(np.where(mask)[0]).extract_surface(
+        algorithm="dataset_surface")
     region = np.asarray(caps.cell_data["RegionId"])
     _, region = np.unique(region, return_inverse=True)
     caps.cell_data["region_id"] = region.astype(np.int32)

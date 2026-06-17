@@ -18,6 +18,8 @@ sample points in the volume mesh a single time and interpolating each frame's
 field, reusing the fast tet sampler.
 """
 
+from os import PathLike
+
 import numpy as np
 import pyvista as pv
 
@@ -88,18 +90,19 @@ class BoundaryReseeder:
     # ---- construction helpers ------------------------------------------------
 
     def _load_caps(self, caps):
-        if isinstance(caps, (str, bytes)):
+        path_types = (str, bytes, PathLike)
+        if isinstance(caps, path_types):
             caps = pv.read(caps)
         elif isinstance(caps, (list, tuple)):
             # one surface (or path) per cap -> stitch with a region id each
             blocks = []
             for i, c in enumerate(caps):
-                s = pv.read(c) if isinstance(c, (str, bytes)) else c
-                s = s.extract_surface().triangulate()
+                s = pv.read(c) if isinstance(c, path_types) else c
+                s = s.extract_surface(algorithm="dataset_surface").triangulate()
                 s.cell_data[self.region_key] = np.full(s.n_cells, i, np.int32)
                 blocks.append(s)
             caps = blocks[0].merge(blocks[1:]) if len(blocks) > 1 else blocks[0]
-        caps = caps.extract_surface().triangulate()
+        caps = caps.extract_surface(algorithm="dataset_surface").triangulate()
         if self.region_key not in caps.cell_data:
             caps.cell_data[self.region_key] = np.zeros(caps.n_cells, np.int32)
         return caps

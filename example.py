@@ -1,17 +1,16 @@
 """Minimal end-to-end example of the particle_tracking package.
 
-Tracks particles through the 75_250 pulsatile U-bend with backflow-aware inflow
+Tracks particles through the example pulsatile U-bend with backflow-aware inflow
 reseeding from the provided cap surfaces, then saves the tracks.
 """
 
 import particle_tracking as pt
 
-PVD = "75_250_scan/cfd_pvd/dataset.pvd"
-CAPS = ["75_250_scan/Inlet.vtp", "75_250_scan/Outlet.vtp"]
+FLOW = "example/CFD_velocity.vtu"   # single mesh + time-resolved velocity fields
+CAPS = ["example/Inlet.vtp", "example/Outlet.vtp"]
 
-# 1. Load the time-resolved flow field (.vtu or .pvd is auto-detected).
-#    For a big .pvd, subsamp=N keeps every Nth frame to save memory.
-flow = pt.load_flow(PVD, active_key="Velocity", subsamp=2)
+# 1. Load the time-resolved flow field (.vtu single-file or .pvd series; auto-detected).
+flow = pt.load_flow(FLOW, active_key="Velocity")
 
 # 2. Backflow-aware inflow reseeder from the labeled inlet/outlet surfaces.
 #    Passing dt spreads new particles over a thin inflow volume (no density
@@ -31,8 +30,8 @@ print("saved tracks.h5")
 
 # --- Large runs: spread across processes (each worker reloads the field) ---
 # result = pt.track_parallel(
-#     PVD, n_particles=2e6, dt=0.002, caps=CAPS,
-#     active_key="Velocity", n_workers=3, subsamp=2,
+#     FLOW, n_particles=2e6, dt=0.002, caps=CAPS,
+#     active_key="Velocity", n_workers=3,
 # )
 
 # --- No labeled caps? Reconstruct them from a volume mesh (no-slip walls -> v~0):
