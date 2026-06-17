@@ -1,16 +1,21 @@
-# particle_tracking
+# MRSimTracks
 
-Lagrangian particle tracking in time-resolved (pulsatile) CFD meshes. Seeds
+Generate CFD-derived particle trajectories for MR flow simulation.
+
+MRSimTracks performs Lagrangian particle tracking in time-resolved (pulsatile)
+CFD meshes. It operates on mesh velocity fields, not MR image data. It seeds
 particles in a tetrahedral flow domain, advects them through a time-periodic
 velocity field (RK4), and recycles out-of-bounds particles back to the inflow
-boundaries — with optional **backflow-aware** reseeding that only re-injects
-where flow is actually entering the domain.
+boundaries with optional **backflow-aware** reseeding.
 
 ## Install
 
 ```bash
 uv sync          # installs the package (editable) and dependencies
 ```
+
+The distribution name is `mrsimtracks`; the Python import package is currently
+`particle_tracking`.
 
 ## Quick start
 

@@ -14,9 +14,9 @@ exclude = [
 packages = ["particle_tracking"]
 
 [project]
-name = "particle-tracking"
+name = "mrsimtracks"
 version = "0.1.0"
-description = "Lagrangian particle tracking for time-resolved CFD meshes used in MR simulation workflows."
+description = "Generate CFD-derived particle trajectories for MR flow simulation."
 readme = "README.md"
 requires-python = ">=3.12"
 license = "MIT"
@@ -26,6 +26,8 @@ authors = [
 keywords = [
     "particle-tracking",
     "cfd",
+    "flow-simulation",
+    "mr-simulation",
     "mri",
     "streamlines",
     "pyvista",
@@ -51,6 +53,12 @@ dependencies = [
     "tqdm>=4.68.2",
     "vtk>=9.6.2",
 ]
+
+[project.urls]
+Homepage = "https://github.com/mcgrathcm/MRSimTracks"
+Repository = "https://github.com/mcgrathcm/MRSimTracks"
+Issues = "https://github.com/mcgrathcm/MRSimTracks/issues"
+Changelog = "https://github.com/mcgrathcm/MRSimTracks/blob/main/CHANGELOG.md"
 
 [dependency-groups]
 dev = [

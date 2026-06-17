@@ -13,7 +13,7 @@ This project uses semantic versioning while the public API stabilizes.
 
 ## [0.1.0] - 2026-06-17
 
-- Initial packaged version of the particle tracking library.
+- Initial packaged version of MRSimTracks.
 - Add high-level APIs for loading flow fields, tracking particles, parallel
   tracking, cap extraction, and boundary-aware reseeding.
 - Add time-resolved static-mesh `.pvd` loading and fast tetrahedral sampling.
