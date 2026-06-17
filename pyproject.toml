@@ -71,3 +71,8 @@ testpaths = ["tests"]
 markers = [
     "large: tests that require full-size Git LFS datasets",
 ]
+
+[tool.coverage.run]
+omit = [
+    "particle_tracking/caps.py",
+]

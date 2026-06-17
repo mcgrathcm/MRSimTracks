@@ -61,3 +61,30 @@ def test_small_case_density_stays_roughly_stable():
     assert 0.5 < stats.median_nn_ratio < 1.75
     assert stats.occupied_bin_ratio > 0.75
     assert stats.normalized_l1 < 0.75
+
+
+def test_small_case_euler_path_moves_particles():
+    flow = pt.load_flow(SMALL_FLOW, active_key="Velocity", pbar=False)
+    seeds = deterministic_cell_center_seeds(flow, 32)
+    reseeder = pt.BoundaryReseeder(
+        [INLET, OUTLET],
+        flow,
+        rng=np.random.default_rng(RNG_SEED),
+        dt=DT,
+    )
+
+    result = pt.track(
+        flow,
+        seeds=seeds,
+        dt=DT,
+        tmax=0.004,
+        reseeder=reseeder,
+        method="Euler",
+        pbar=False,
+    )
+    stats = trajectory_stats(result, seeds)
+
+    assert result.positions.shape == (2, 32, 3)
+    assert stats.finite
+    assert stats.moving_fraction > 0.95
+    assert stats.median_displacement > 0.01

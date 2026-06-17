@@ -42,6 +42,53 @@ def test_small_fixture_tracks_with_boundary_reseeding():
     assert np.isfinite(result.positions).all()
 
 
+def test_boundary_reseeder_flux_waveform_is_finite_and_balanced():
+    flow = pt.load_flow(SMALL_FLOW, active_key="Velocity", pbar=False)
+    reseeder = pt.BoundaryReseeder([INLET, OUTLET], flow, dt=0.002)
+
+    times, flux = reseeder.flux_waveform()
+    imbalance = np.abs(flux.sum(axis=1))
+    total_flux = np.abs(flux).sum(axis=1)
+
+    assert times.shape == (11,)
+    assert flux.shape == (11, 2)
+    assert np.isfinite(times).all()
+    assert np.isfinite(flux).all()
+    assert np.max(imbalance / total_flux) < 0.01
+
+
+def test_boundary_reseeder_is_repeatable_with_seeded_rng():
+    flow = pt.load_flow(SMALL_FLOW, active_key="Velocity", pbar=False)
+    reseeder1 = pt.BoundaryReseeder(
+        [INLET, OUTLET],
+        flow,
+        rng=np.random.default_rng(1234),
+        dt=0.002,
+    )
+    reseeder2 = pt.BoundaryReseeder(
+        [INLET, OUTLET],
+        flow,
+        rng=np.random.default_rng(1234),
+        dt=0.002,
+    )
+
+    seeds1 = reseeder1.reseed(100, t=0.006)
+    seeds2 = reseeder2.reseed(100, t=0.006)
+
+    np.testing.assert_allclose(seeds1, seeds2)
+    assert np.isfinite(seeds1).all()
+
+
+def test_boundary_reseeder_accepts_string_paths():
+    flow = pt.load_flow(SMALL_FLOW, active_key="Velocity", pbar=False)
+    reseeder = pt.BoundaryReseeder([str(INLET), str(OUTLET)], flow, dt=0.002)
+
+    seeds = reseeder.reseed(8, t=0.0)
+
+    assert seeds.shape == (8, 3)
+    assert np.isfinite(seeds).all()
+
+
 @pytest.mark.large
 def test_full_lfs_fixture_tracks_with_boundary_reseeding():
     if FULL_FLOW.stat().st_size < 100_000_000:

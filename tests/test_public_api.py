@@ -45,3 +45,15 @@ def test_tracking_result_save_writes_expected_hdf5_schema(tmp_path):
         assert f["position"].shape == (2, 3, 3)
         assert f["reset"].shape == (2, 3)
         assert f.attrs["dt"] == pytest.approx(0.004)
+
+
+def test_tracking_result_properties():
+    result = pt.TrackingResult(
+        positions=np.zeros((4, 3, 3)),
+        reset=np.zeros((4, 3), dtype=bool),
+        dt=0.002,
+    )
+
+    assert result.n_steps == 4
+    assert result.n_particles == 3
+    np.testing.assert_allclose(result.times, [0.0, 0.002, 0.004, 0.006])
