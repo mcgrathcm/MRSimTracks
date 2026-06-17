@@ -6,6 +6,7 @@ This project uses semantic versioning while the public API stabilizes.
 
 ## [Unreleased]
 
+- Add normal-commit coverage reporting and small behavioral regression tests.
 - Add GitHub Actions CI for normal tests and release validation.
 - Add Git LFS tracking for the full example CFD dataset.
 - Add a reduced real-data fixture for fast CI.

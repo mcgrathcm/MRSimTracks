@@ -4,6 +4,9 @@ __pycache__/
 *.pyc
 .ipynb_checkpoints/
 dist/
+.coverage
+coverage.xml
+htmlcov/
 
 # Local scratch data moved out of the publishable repo surface
 ignore/

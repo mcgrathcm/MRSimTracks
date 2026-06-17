@@ -19,7 +19,7 @@ git lfs pull --include="example/CFD_velocity.vtu"
 Run the normal test suite before committing:
 
 ```bash
-uv run pytest -m "not large"
+uv run pytest -m "not large" --cov=particle_tracking --cov-report=term-missing
 ```
 
 The normal suite uses the reduced fixture in `tests/data/`, so it does not need

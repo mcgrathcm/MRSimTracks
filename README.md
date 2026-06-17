@@ -87,7 +87,7 @@ Normal CI runs against a reduced real-data fixture:
 
 ```bash
 uv sync --group dev
-uv run pytest -m "not large"
+uv run pytest -m "not large" --cov=particle_tracking --cov-report=term-missing
 ```
 
 Full-data validation uses the Git LFS example file and runs only for release
