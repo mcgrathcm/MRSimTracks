@@ -25,12 +25,12 @@ import pyvista as pv
 
 
 def _frame_velocity(flow, k):
-    """Node velocity array for flow frame index k (handles all timeMesh* classes)."""
-    if hasattr(flow, "fields"):                 # timeMeshStaticPVD (one geom + fields)
+    """Node velocity array for flow frame index k."""
+    if hasattr(flow, "fields"):                 # StaticPVDFlow (one geom + fields)
         return np.asarray(flow.fields[k])
-    if hasattr(flow, "meshes"):                 # timeMeshPVD (full mesh per frame)
+    if hasattr(flow, "meshes"):                 # PVDFlow (full mesh per frame)
         return np.asarray(flow.meshes[k].point_data[flow.active_key])
-    return np.asarray(flow.mesh.point_data[flow._get_mesh_key(k)])  # timeMeshSingleVTU
+    return np.asarray(flow.mesh.point_data[flow._get_mesh_key(k)])  # SingleVTUFlow
 
 
 class BoundaryReseeder:
@@ -39,7 +39,7 @@ class BoundaryReseeder:
         """
         caps : pv.PolyData with a per-cell ``region_key`` array, a path to such a
                file, or a list of surface meshes/paths (one cap each).
-        flow : a timeMesh* object exposing an all-tet ``_sampler``.
+        flow : a loaded flow object exposing an all-tet ``_sampler``.
         inward_eps : minimum distance to offset seed points inside the domain
                along the inward normal. Defaults to ~half the median cap edge.
         dt : tracking time step. When given, seeds are spread over a random

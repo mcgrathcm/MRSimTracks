@@ -41,6 +41,23 @@ result.times          # (n_steps,)
 result.save("tracks.h5")
 ```
 
+For large single-process runs, write each timestep directly to HDF5 instead of
+keeping all positions in RAM:
+
+```python
+result, metrics = mt.track(
+    flow,
+    seeds=seeds,
+    dt=0.002,
+    reseeder=reseeder,
+    output_path="tracks.h5",
+    return_metrics=True,
+)
+
+result.is_file_backed  # True until result.positions or result.reset is loaded
+metrics["particle_steps_per_s"]
+```
+
 Run `example.py` for a complete version using local example data. The large
 example flow file is not tracked in normal Git; see `example/README.md`.
 
@@ -61,7 +78,7 @@ result = mt.track_parallel(
 | Function | Purpose |
 |---|---|
 | `load_flow(path, active_key=...)` | Load `.vtu` (one geometry, many time fields) or `.pvd` (series); auto-selects the memory-efficient reader. `subsamp=N` keeps every Nth frame. |
-| `track(flow, seeds=..., dt=..., reseeder=...)` | Single-process tracking → `TrackingResult`. |
+| `track(flow, seeds=..., dt=..., reseeder=...)` | Single-process tracking → `TrackingResult`. Use `output_path=...` for streamed HDF5 output and `return_metrics=True` for timing metrics. |
 | `track_parallel(path, ..., caps=..., n_workers=...)` | Multi-process tracking → `TrackingResult`. |
 | `BoundaryReseeder(caps, flow, dt=...)` | Flux-weighted, time-resolved inflow reseeder. `caps` = cap surface path(s) or a surface with a `region_id` cell array. |
 

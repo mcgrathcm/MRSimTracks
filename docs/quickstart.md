@@ -26,6 +26,25 @@ The saved HDF5 file contains:
 - `reset`: reset flags with shape `(n_steps, n_particles)`
 - `dt`: time step attribute
 
+## Streaming Output
+
+For large single-process runs, pass `output_path` so timesteps are written
+directly to HDF5 instead of accumulated in memory:
+
+```python
+result, metrics = mt.track(
+    flow,
+    seeds=seeds,
+    dt=0.002,
+    reseeder=reseeder,
+    output_path="tracks.h5",
+    return_metrics=True,
+)
+
+result.is_file_backed
+metrics["particle_steps_per_s"]
+```
+
 ## Parallel Tracking
 
 For larger runs:

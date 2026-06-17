@@ -29,7 +29,7 @@ def _read_vtu(filepath, active_key, pbar):
     return reader.read()
 
 
-class timeMeshSingleVTU:
+class SingleVTUFlow:
     def __init__(self, filepath, active_key="velocity", pbar = False, only_active_key=False):
         self.filepath = filepath
         if only_active_key:
@@ -104,7 +104,7 @@ class timeMeshSingleVTU:
         vel = np.asarray(self.active_mesh.point_data[self.active_key])
         return self._sampler.sample(points_xyz, vel, guess=guess)
 
-class timeMeshPVD:
+class PVDFlow:
     def __init__(self, filepath, dt=None, active_key="velocity", pbar = True, subsamp = 1):
 
         self.reader = pv.get_reader(filepath)
@@ -186,18 +186,18 @@ def _parse_pvd(filepath):
     return out
 
 
-class timeMeshStaticPVD:
+class StaticPVDFlow:
     """Time-resolved flow over a STATIC mesh from a .pvd series.
 
-    Unlike ``timeMeshPVD``, which keeps a full mesh copy per timestep (so memory
+    Unlike ``PVDFlow``, which keeps a full mesh copy per timestep (so memory
     scales as one-mesh-per-frame, with the connectivity duplicated hundreds of
     times), this stores the geometry once and only the active field per frame --
     cutting memory from ~one-mesh-per-frame to ~one-field-per-frame (e.g. 430
     frames of a 1.1M-cell tet mesh: tens of GB -> ~1-2 GB). It assumes the mesh
-    does not change in time (``timeMeshPVD`` already assumes this for its single
+    does not change in time (``PVDFlow`` already assumes this for its single
     locator). Only the active field is read from each file (pressure etc. skipped).
 
-    Drop-in for the other timeMesh* classes: same set_active_time / sample /
+    Drop-in for the other flow classes: same set_active_time / sample /
     sample_v / get_mesh interface.
     """
 
@@ -273,14 +273,14 @@ class timeMeshStaticPVD:
 def load_flow(path, active_key="velocity", subsamp=1, only_active_key=True, pbar=False, dt=None):
     """Load a time-resolved flow field, picking the right reader for the file type.
 
-    .vtu -> timeMeshSingleVTU (one file, one field array per timestep)
-    .pvd -> timeMeshStaticPVD (a series; stores geometry once + one field per frame)
+    .vtu -> SingleVTUFlow (one file, one field array per timestep)
+    .pvd -> StaticPVDFlow (a series; stores geometry once + one field per frame)
     """
     ext = str(path).rsplit(".", 1)[-1].lower()
     if ext == "vtu":
-        return timeMeshSingleVTU(path, active_key=active_key, pbar=pbar,
-                                 only_active_key=only_active_key)
+        return SingleVTUFlow(path, active_key=active_key, pbar=pbar,
+                             only_active_key=only_active_key)
     if ext == "pvd":
-        return timeMeshStaticPVD(path, active_key=active_key, pbar=pbar,
-                                 subsamp=subsamp, dt=dt)
+        return StaticPVDFlow(path, active_key=active_key, pbar=pbar,
+                             subsamp=subsamp, dt=dt)
     raise ValueError(f"unsupported flow file type: .{ext} (expected .vtu or .pvd)")

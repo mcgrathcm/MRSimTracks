@@ -20,8 +20,8 @@ import time
 import numpy as np
 import pyvista as pv
 
-from mrsimtracks.core import tracking
-from mrsimtracks.io import timeMeshSingleVTU
+from mrsimtracks.core import _track_particles
+from mrsimtracks.io import SingleVTUFlow
 
 
 def _fmt(n):
@@ -70,13 +70,13 @@ def bench_tracking(flow, inlet, counts, nsteps, dt, method, rng):
     rows = []
     for n in counts:
         seeds = make_particles(flow, n, rng)
-        timings = {}
-        tracking(flow, seeds, inlet, dt, tmax=nsteps * dt,
-                 method=method, pbar=False, timings=timings)
-        mpstep = timings["particle_steps_per_s"] / 1e6
-        print(f"{_fmt(n):>12} {timings['s_per_step']*1e3:>10.2f} {mpstep:>10.3f} "
-              f"{timings['sample_frac']*100:>8.1f}% {timings['n_sample_calls']/nsteps:>11.1f}")
-        rows.append(dict(n=int(n), **{k: v for k, v in timings.items()
+        metrics = {}
+        _track_particles(flow, seeds, inlet, dt, tmax=nsteps * dt,
+                         method=method, pbar=False, metrics=metrics)
+        mpstep = metrics["particle_steps_per_s"] / 1e6
+        print(f"{_fmt(n):>12} {metrics['s_per_step']*1e3:>10.2f} {mpstep:>10.3f} "
+              f"{metrics['sample_frac']*100:>8.1f}% {metrics['n_sample_calls']/nsteps:>11.1f}")
+        rows.append(dict(n=int(n), **{k: v for k, v in metrics.items()
                                       if k not in ("method",)}))
     return rows
 
@@ -103,7 +103,7 @@ def main():
 
     print(f"flow file: {args.flow}")
     t0 = time.perf_counter()
-    flow = timeMeshSingleVTU(args.flow)
+    flow = SingleVTUFlow(args.flow)
     t_load = time.perf_counter() - t0
     print(f"load: {t_load:.1f}s | {flow.mesh.n_points:,} points | "
           f"{flow.mesh.n_cells:,} cells | {len(flow.times)} timesteps")

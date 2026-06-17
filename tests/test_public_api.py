@@ -45,6 +45,25 @@ def test_tracking_result_save_writes_expected_hdf5_schema(tmp_path):
         assert f.attrs["dt"] == pytest.approx(0.004)
 
 
+def test_tracking_result_open_is_file_backed(tmp_path):
+    result = pt.TrackingResult(
+        positions=np.arange(4 * 3 * 3, dtype=float).reshape(4, 3, 3),
+        reset=np.zeros((4, 3), dtype=bool),
+        dt=0.002,
+    )
+    path = tmp_path / "tracks.h5"
+    result.save(path)
+
+    opened = pt.TrackingResult.open(path)
+
+    assert opened.is_file_backed
+    assert opened.n_steps == 4
+    assert opened.n_particles == 3
+    assert opened.dt == pytest.approx(0.002)
+    np.testing.assert_allclose(opened.positions, result.positions)
+    assert not opened.is_file_backed
+
+
 def test_tracking_result_properties():
     result = pt.TrackingResult(
         positions=np.zeros((4, 3, 3)),

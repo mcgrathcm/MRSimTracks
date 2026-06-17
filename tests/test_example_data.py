@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import h5py
 import numpy as np
 import pytest
 
@@ -40,6 +41,37 @@ def test_small_fixture_tracks_with_boundary_reseeding():
     assert result.positions.shape == (2, 10, 3)
     assert result.reset.shape == (2, 10)
     assert np.isfinite(result.positions).all()
+
+
+def test_small_fixture_streams_tracks_and_returns_metrics(tmp_path):
+    flow = pt.load_flow(SMALL_FLOW, active_key="Velocity", pbar=False)
+    reseeder = pt.BoundaryReseeder([INLET, OUTLET], flow, dt=0.002)
+    path = tmp_path / "streamed-tracks.h5"
+
+    result, metrics = pt.track(
+        flow,
+        seeds=flow.active_mesh.points[:10],
+        dt=0.002,
+        tmax=0.004,
+        reseeder=reseeder,
+        pbar=False,
+        output_path=path,
+        return_metrics=True,
+    )
+
+    assert result.is_file_backed
+    assert result.path == path
+    assert result.n_steps == 2
+    assert result.n_particles == 10
+    assert metrics["n_particles"] == 10
+    assert metrics["n_steps"] == 2
+    assert metrics["particle_steps_per_s"] > 0
+
+    with h5py.File(path, "r") as f:
+        assert f["position"].shape == (2, 10, 3)
+        assert f["reset"].shape == (2, 10)
+        assert f.attrs["dt"] == pytest.approx(0.002)
+        assert np.isfinite(f["position"][...]).all()
 
 
 def test_boundary_reseeder_flux_waveform_is_finite_and_balanced():

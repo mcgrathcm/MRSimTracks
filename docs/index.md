@@ -17,6 +17,7 @@ workflow is:
 - Supports single-file `.vtu` time series and `.pvd` collections.
 - Uses a fast tetrahedral sampler with temporal-coherence cell walking.
 - Provides flux-weighted, backflow-aware boundary reseeding.
+- Can stream large tracking outputs directly to HDF5.
 - Includes small normal-CI fixtures and full Git LFS release validation.
 
 ## Import Name

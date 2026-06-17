@@ -16,12 +16,12 @@ array (0..n_caps-1), saved to caps_labeled.vtp.
 import numpy as np
 import pyvista as pv
 
-from ..io import timeMeshSingleVTU
+from ..io import SingleVTUFlow
 
 
 def extract_caps(flow_file, out="caps_labeled.vtp", vmag_thresh=0.5, min_faces=20,
                  active_key="velocity"):
-    flow = timeMeshSingleVTU(flow_file, active_key=active_key, only_active_key=True)
+    flow = SingleVTUFlow(flow_file, active_key=active_key, only_active_key=True)
     full = flow.mesh
     surf = full.extract_surface(algorithm="dataset_surface").triangulate()
     orig = surf.point_data["vtkOriginalPointIds"]
