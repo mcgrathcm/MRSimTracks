@@ -6,6 +6,16 @@ This project uses semantic versioning while the public API stabilizes.
 
 ## [Unreleased]
 
+- Rename the import package to `mrsimtracks` and narrow the top-level public
+  API.
+- Split tracking, parallel execution, flow loading, sampling, seeding, and
+  reseeding into focused modules.
+- Add explicit seeding control to `track` and `track_parallel`.
+- Add streamed HDF5 tracking output with file-backed `TrackingResult` loading.
+- Add structured timing metrics via `return_metrics=True`.
+- Add input validation for tracking methods, seed shapes, flow array names, and
+  seeding arguments.
+- Move cap extraction to `mrsimtracks.dev` as a development helper.
 - Add MkDocs GitHub Pages documentation.
 - Add full-cycle Git LFS release validation with JSON metrics artifacts.
 - Add normal-commit coverage reporting and small behavioral regression tests.

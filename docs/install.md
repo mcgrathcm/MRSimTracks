@@ -1,5 +1,11 @@
 # Install
 
+From GitHub:
+
+```bash
+pip install "mrsimtracks @ git+https://github.com/mcgrathcm/MRSimTracks.git"
+```
+
 For development from a clone:
 
 ```bash

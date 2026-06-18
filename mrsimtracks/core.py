@@ -8,7 +8,21 @@ from tqdm.auto import tqdm
 
 
 class TrackingResult:
-    """Particle tracks from a tracking run."""
+    """Particle trajectories and reset flags from a tracking run.
+
+    Args:
+        positions (np.ndarray | None): In-memory particle positions with shape
+            ``(n_steps, n_particles, 3)``.
+        reset (np.ndarray | None): In-memory reset flags with shape
+            ``(n_steps, n_particles)``.
+        dt (float | None): Tracking time step in seconds.
+        path (str | pathlib.Path | None): HDF5 file path for a file-backed
+            result.
+        shape (tuple[int, int, int] | None): Position dataset shape for
+            file-backed results.
+        metrics (dict | None): Optional timing/throughput metrics returned by
+            tracking.
+    """
 
     def __init__(self, positions=None, reset=None, dt=None, *, path=None,
                  shape=None, metrics=None):
@@ -158,6 +172,20 @@ def _hdf5_chunks(shape):
     return (1, min(shape[1], 65_536))
 
 
+def _normalize_method(method):
+    methods = {
+        "rk4": "RK4",
+        "euler": "Euler",
+    }
+    try:
+        return methods[method.lower()]
+    except AttributeError as exc:
+        raise TypeError("method must be a string") from exc
+    except KeyError as exc:
+        valid = ", ".join(sorted(set(methods.values())))
+        raise ValueError(f"unsupported tracking method {method!r}; expected one of: {valid}") from exc
+
+
 def _track_particles(flow_mesh, initial_seeds: pv.PolyData, reset_points: np.ndarray,
                      dt, tmax, method="RK4", pbar=True, metrics=None,
                      reseeder=None, rng=None, step_writer=None):
@@ -173,12 +201,21 @@ def _track_particles(flow_mesh, initial_seeds: pv.PolyData, reset_points: np.nda
         )
 
     rng = rng if rng is not None else np.random.default_rng()
+    method = _normalize_method(method)
+    if dt <= 0:
+        raise ValueError("dt must be > 0")
+    if tmax <= 0:
+        raise ValueError("tmax must be > 0")
     n_steps = int(tmax/dt)
+    if n_steps < 1:
+        raise ValueError("tmax must be at least one dt")
 
     # Positions are carried as a plain (n, 3) array; sample_v works on numpy
     # directly, so we avoid wrapping/unwrapping a PolyData every substep.
     r = np.ascontiguousarray(initial_seeds.points, dtype=float).copy()
     n_particles = r.shape[0]
+    if n_particles < 1:
+        raise ValueError("provide at least one seed point")
 
     if step_writer is None:
         positions = np.zeros((n_steps, n_particles, 3))
@@ -281,24 +318,43 @@ def track(flow, seeds=None, dt=1e-3, tmax=None, reseeder=None, inlet=None,
           return_metrics=False):
     """Track particles through a loaded flow field.
 
-    Parameters
-    ----------
-    flow
-        Loaded flow field from :func:`mrsimtracks.load_flow`.
-    seeds
-        Initial particle positions as an ``(n, 3)`` array or ``pyvista.PolyData``.
-    reseeder
-        Boundary reseeder used to recycle out-of-bounds particles. If omitted,
-        ``inlet`` must provide static reset points.
-    output_path
-        Optional HDF5 path. When provided, positions/reset flags are streamed to
-        disk and the returned result is file-backed until arrays are accessed.
-    return_metrics
-        When ``True``, return ``(result, metrics)`` with loop timing metrics.
+    Args:
+        flow (object): Loaded flow field from :func:`mrsimtracks.load_flow`.
+        seeds (np.ndarray | pyvista.PolyData): Initial particle positions as an ``(n, 3)`` array or
+            ``pyvista.PolyData``.
+        dt (float): Tracking time step in seconds.
+        tmax (float | None): Total tracking duration. Defaults to one flow
+            period.
+        reseeder (BoundaryReseeder | None): Boundary reseeder used to recycle
+            out-of-bounds particles. If omitted, ``inlet`` must provide static
+            reset points.
+        inlet (np.ndarray | None): Static reset points used when ``reseeder`` is
+            omitted.
+        method (str): Integration method, either ``"RK4"`` or ``"Euler"``.
+        pbar (bool): Show a progress bar.
+        rng (numpy.random.Generator | None): Optional generator for
+            deterministic reset draws.
+        output_path (str | pathlib.Path | None): Optional HDF5 path. When
+            provided, positions/reset flags are streamed to disk and the
+            returned result is file-backed until arrays are accessed.
+        return_metrics (bool): When ``True``, return ``(result, metrics)`` with
+            loop timing metrics.
+
+    Returns:
+        (Union[TrackingResult, tuple]): ``TrackingResult`` by
+            default, or ``(TrackingResult, metrics)`` when
+            ``return_metrics=True``.
     """
     if seeds is None:
         raise ValueError("provide seeds for tracking")
-    seeds = seeds if isinstance(seeds, pv.PolyData) else pv.PolyData(np.asarray(seeds, float))
+    method = _normalize_method(method)
+    if not isinstance(seeds, pv.PolyData):
+        seed_arr = np.asarray(seeds, float)
+        if seed_arr.ndim != 2 or seed_arr.shape[1] != 3 or seed_arr.shape[0] == 0:
+            raise ValueError("seeds must have shape (n_particles, 3)")
+        seeds = pv.PolyData(seed_arr)
+    elif seeds.n_points == 0:
+        raise ValueError("provide at least one seed point")
     if tmax is None:
         tmax = flow.tmax
     inlet_arr = np.empty((0, 3)) if inlet is None else np.asarray(inlet, float)

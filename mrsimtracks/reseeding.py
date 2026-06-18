@@ -34,20 +34,29 @@ def _frame_velocity(flow, k):
 
 
 class BoundaryReseeder:
+    """Flux-weighted boundary reseeder for particles that leave the domain.
+
+    The reseeder samples currently inflowing cap faces using per-face weights
+    ``max(-v . n, 0) * area``. This handles backflow and caps that are partly
+    inflow and partly outflow at the same timestep.
+
+    Args:
+        caps (pyvista.PolyData | str | pathlib.Path | list): A cap surface with
+            a per-cell ``region_id`` array, a path to such a file, or a list of
+            cap surface paths/meshes. A list is interpreted as one cap per item.
+        flow (object): Loaded flow object returned by ``mrsimtracks.load_flow``.
+        rng (numpy.random.Generator | None): Optional generator for repeatable
+            reseeding.
+        region_key (str): Cell-data array name used to identify cap regions.
+        inward_eps (float | None): Minimum inward offset for reseeded points.
+        dt (float | None): Tracking time step. When provided, reseeded points
+            are spread over a thin inward volume instead of a single plane.
+        verify (bool): Check reseeded points with the mesh locator and fall back
+            to known-valid face sample points if needed.
+    """
+
     def __init__(self, caps, flow, rng=None, region_key="region_id",
                  inward_eps=None, dt=None, verify=True):
-        """
-        caps : pv.PolyData with a per-cell ``region_key`` array, a path to such a
-               file, or a list of surface meshes/paths (one cap each).
-        flow : a loaded flow object exposing an all-tet ``_sampler``.
-        inward_eps : minimum distance to offset seed points inside the domain
-               along the inward normal. Defaults to ~half the median cap edge.
-        dt : tracking time step. When given, seeds are spread over a random
-               inward depth (a thin inflow *volume*) instead of a single plane,
-               so successive per-step reseeds overlap rather than forming
-               advecting density stripes -- important for uniform-density MR use.
-               When None, a fixed ``inward_eps`` offset is used (plane seeding).
-        """
         self.flow = flow
         self.rng = rng if rng is not None else np.random.default_rng()
         self.region_key = region_key

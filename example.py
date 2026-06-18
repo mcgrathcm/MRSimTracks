@@ -1,7 +1,7 @@
 """Minimal end-to-end example of the mrsimtracks package.
 
-Tracks particles through the example pulsatile U-bend with backflow-aware inflow
-reseeding from the provided cap surfaces, then saves the tracks.
+This runs on the reduced fixture committed under ``tests/data`` so it works
+without fetching the full Git LFS example dataset.
 """
 
 import numpy as np
@@ -9,8 +9,8 @@ import numpy as np
 import mrsimtracks as mt
 from mrsimtracks.seeding import seed_mesh
 
-FLOW = "example/CFD_velocity.vtu"   # single mesh + time-resolved velocity fields
-CAPS = ["example/Inlet.vtp", "example/Outlet.vtp"]
+FLOW = "tests/data/CFD_velocity_00190_00210.vtu"
+CAPS = ["tests/data/Inlet.vtp", "tests/data/Outlet.vtp"]
 
 # 1. Load the time-resolved flow field (.vtu single-file or .pvd series; auto-detected).
 flow = mt.load_flow(FLOW, active_key="Velocity")
@@ -21,15 +21,19 @@ flow = mt.load_flow(FLOW, active_key="Velocity")
 reseeder = mt.BoundaryReseeder(CAPS, flow, dt=0.002)
 
 # 3. Seed and track. Seeding is explicit so users control the initial particle
-#    distribution. tmax defaults to one period (flow.tmax).
-seeds = seed_mesh(flow.active_mesh, 2e5, rng=np.random.default_rng(0))
-result = mt.track(flow, seeds=seeds, dt=0.002, reseeder=reseeder)
+#    distribution. Keep this small for a quick smoke test.
+seeds = seed_mesh(flow.active_mesh, 1_000, rng=np.random.default_rng(0))
+result = mt.track(flow, seeds=seeds, dt=0.002, tmax=0.01, reseeder=reseeder, pbar=False)
 
 # 4. Inspect / save.
 print(f"positions {result.positions.shape}  (n_steps, n_particles, 3)")
 print(f"total resets: {int(result.reset.sum())}")
 result.save("tracks.h5")
 print("saved tracks.h5")
+
+# --- Full-cycle data lives in example/CFD_velocity.vtu via Git LFS. ---
+# FLOW = "example/CFD_velocity.vtu"
+# CAPS = ["example/Inlet.vtp", "example/Outlet.vtp"]
 
 # --- Large runs: spread across processes (each worker reloads the field) ---
 # result = mt.track_parallel(

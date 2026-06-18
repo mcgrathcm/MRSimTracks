@@ -1,7 +1,7 @@
 import numpy as np
 import pyvista as pv
 
-from .core import TrackingResult, _track_particles
+from .core import TrackingResult, _normalize_method, _track_particles
 from .io import PVDFlow, SingleVTUFlow, StaticPVDFlow, load_flow
 
 
@@ -53,11 +53,41 @@ def track_parallel(path, seeds, dt=1e-3, tmax=None, caps=None, inlet=None,
                    n_workers=3, active_key="velocity", method="RK4", subsamp=1,
                    only_active_key=True, pbar=True, rng=None,
                    return_metrics=False):
-    """Track particles across processes, each reloading ``path``."""
+    """Track particles in parallel, with each worker reloading the flow field.
+
+    Args:
+        path (str | pathlib.Path): Path to a supported flow file (``.vtu`` or
+            ``.pvd``).
+        seeds (np.ndarray): Initial particle positions as an ``(n, 3)`` array.
+        dt (float): Tracking time step in seconds.
+        tmax (float | None): Total tracking duration. Defaults to one flow
+            period.
+        caps (str | pathlib.Path | list | None): Cap surface path(s) used to
+            build a ``BoundaryReseeder`` per worker.
+        inlet (np.ndarray | None): Static reset points used when ``caps`` is
+            omitted.
+        n_workers (int): Number of particle batches/processes.
+        active_key (str): Velocity array prefix in the flow files.
+        method (str): Integration method, either ``"RK4"`` or ``"Euler"``.
+        subsamp (int): Keep every Nth frame when loading ``.pvd`` data.
+        only_active_key (bool): Load only velocity arrays for ``.vtu`` inputs.
+        pbar (bool): Show a progress bar for the first worker.
+        rng (numpy.random.Generator | None): Optional generator for deterministic
+            batching and reset draws.
+        return_metrics (bool): When ``True``, return ``(result, metrics)``.
+
+    Returns:
+        (Union[TrackingResult, tuple]): ``TrackingResult`` by
+            default, or ``(TrackingResult, metrics)`` when
+            ``return_metrics=True``.
+    """
     from joblib import Parallel, delayed
 
     if seeds is None:
         raise ValueError("provide seeds for tracking")
+    method = _normalize_method(method)
+    if n_workers < 1:
+        raise ValueError("n_workers must be >= 1")
 
     if tmax is None:
         flow = load_flow(path, active_key=active_key, subsamp=subsamp,
@@ -67,6 +97,8 @@ def track_parallel(path, seeds, dt=1e-3, tmax=None, caps=None, inlet=None,
 
     rng = rng if rng is not None else np.random.default_rng()
     seeds = np.asarray(seeds, float)
+    if seeds.ndim != 2 or seeds.shape[1] != 3 or seeds.shape[0] == 0:
+        raise ValueError("seeds must have shape (n_particles, 3)")
     inlet_arr = np.empty((0, 3)) if inlet is None else np.asarray(inlet, float)
     batch_size = int(np.ceil(len(seeds) / n_workers))
     batches = batched_particles(seeds, batch_size, rng=rng)

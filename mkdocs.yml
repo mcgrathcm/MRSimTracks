@@ -17,6 +17,7 @@ nav:
   - Install: install.md
   - Quick Start: quickstart.md
   - Data Model: data-model.md
+  - Data Provenance: data-provenance.md
   - Reseeding: reseeding.md
   - Testing: testing.md
   - API Reference: api.md

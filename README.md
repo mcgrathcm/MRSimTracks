@@ -10,6 +10,14 @@ boundaries with optional **backflow-aware** reseeding.
 
 ## Install
 
+From GitHub:
+
+```bash
+pip install "mrsimtracks @ git+https://github.com/mcgrathcm/MRSimTracks.git"
+```
+
+For development from a clone:
+
 ```bash
 uv sync          # installs the package (editable) and dependencies
 ```
@@ -58,8 +66,9 @@ result.is_file_backed  # True until result.positions or result.reset is loaded
 metrics["particle_steps_per_s"]
 ```
 
-Run `example.py` for a complete version using local example data. The large
-example flow file is not tracked in normal Git; see `example/README.md`.
+Run `example.py` for a complete version using the reduced fixture committed in
+`tests/data/`. The full-cycle example flow file is tracked with Git LFS; see
+`example/README.md`.
 
 ## Large runs (multiple processes)
 
@@ -118,6 +127,10 @@ uv run pytest -m large
 ```
 
 See `CONTRIBUTING.md` for the full development workflow.
+
+## Data
+
+The included CFD fixtures are documented separately in `DATA_LICENSE.md`.
 
 ## Documentation
 

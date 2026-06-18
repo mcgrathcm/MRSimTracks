@@ -1,13 +1,20 @@
-# Example Data
+# Full-Cycle Example Data
 
-This folder is reserved for a small local CFD example used by `example.py`.
+This folder contains the full-cycle CFD example used by release validation and
+long-stability checks.
 
-The current `CFD_velocity.vtu` file is intentionally not tracked by Git because
-it is larger than GitHub's normal file limit. Keep local example datasets here,
-or publish them separately with Git LFS, a release asset, or an external data
-archive.
+`CFD_velocity.vtu` is tracked with Git LFS because it is about 816 MB. Fetch it
+after cloning when you need the full dataset:
 
-Expected files for `example.py`:
+```bash
+git lfs pull --include="example/CFD_velocity.vtu"
+```
+
+The quick `example.py` script uses the reduced fixture under `tests/data/` so it
+can run without Git LFS. To run against the full cycle, point `FLOW` and `CAPS`
+in `example.py` at the files in this directory.
+
+Expected files:
 
 - `CFD_velocity.vtu`
 - `Inlet.vtp`

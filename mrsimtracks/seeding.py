@@ -4,15 +4,48 @@ import scipy
 
 
 def seed_mesh(mesh, npoints, rng=None):
+    """Seed points inside the full mesh bounds.
+
+    Args:
+        mesh: PyVista mesh defining the flow domain.
+        npoints: Target number of seed points. The stochastic refinement can
+            return fewer points when the domain is sparse or normalization
+            rejects samples.
+        rng: Optional ``numpy.random.Generator`` for repeatable seeding.
+
+    Returns:
+        Array of seed points with shape ``(n, 3)``.
+    """
     bounds = mesh.bounds
     return seed_region(mesh, npoints, bounds, rng=rng)
 
 def seed_region(mesh, npoints, bounds, normalization=None, rng=None):
+    """Seed points inside a bounded region of a mesh.
+
+    Args:
+        mesh: PyVista mesh defining the flow domain.
+        npoints: Target number of seed points.
+        bounds: Region bounds in PyVista order
+            ``(xmin, xmax, ymin, ymax, zmin, zmax)``.
+        normalization: Optional point-data array name used for stochastic
+            density weighting.
+        rng: Optional ``numpy.random.Generator`` for repeatable seeding.
+
+    Returns:
+        Array of seed points with shape ``(n, 3)``.
+    """
     rng = rng if rng is not None else np.random.default_rng()
+    npoints = int(npoints)
+    if npoints < 1:
+        raise ValueError("npoints must be >= 1")
+    if len(bounds) != 6:
+        raise ValueError("bounds must contain six values")
 
     vol = (bounds[1] - bounds[0]) * (bounds[3] - bounds[2]) * (bounds[5] - bounds[4])
+    if vol <= 0:
+        raise ValueError("bounds must define a positive volume")
     # Aim for 10x less inital points than desired
-    npoints_initial = npoints//10
+    npoints_initial = max(1, npoints//10)
     dx_init = (vol / npoints_initial) ** (1/3)
 
     x = np.arange(bounds[0], bounds[1], dx_init)
@@ -27,10 +60,12 @@ def seed_region(mesh, npoints, bounds, normalization=None, rng=None):
     point_cloud = pv.PolyData(points)
 
     # Extract surface
-    surf = mesh.extract_geometry()
+    surf = mesh.extract_surface(algorithm=None)
 
     # Initial guess of points  inside the surface
-    inside = point_cloud.select_enclosed_points(surf)["SelectedPoints"]
+    selected = point_cloud.select_interior_points(surf)
+    selected_key = "selected_points" if "selected_points" in selected.point_data else "SelectedPoints"
+    inside = selected[selected_key]
     # This is like a binary mask of the mesh
     inside_array = inside.reshape(len(z), len(x), len(y))
     # dilate (to account for boundary regions)
@@ -41,6 +76,8 @@ def seed_region(mesh, npoints, bounds, normalization=None, rng=None):
 
 
     valid = points[np.argwhere(inside)[:, 0], :]
+    if valid.shape[0] == 0:
+        raise ValueError("no candidate seed points found inside the requested region")
 
     # # Refine with sample operation
     # valid = valid0[np.argwhere(point_valid.sample(mesh)['vtkValidPointMask'])[:,0],:]
@@ -66,12 +103,17 @@ def seed_region(mesh, npoints, bounds, normalization=None, rng=None):
         # Sample absolute velocity for the seeded points, and do stoastic subsampling based on normalization field
         point_subsampled = pv.PolyData(subsampled)
         samp = point_subsampled.sample(mesh)
+        if normalization not in samp.point_data:
+            raise ValueError(f"normalization array {normalization!r} not found")
 
         if samp[normalization].ndim > 1:
             normag = np.sum(samp[normalization]**2, axis=1)**0.5
-            density = normag / np.max(normag)
+            max_density = np.max(normag)
+            density = normag / max_density if max_density > 0 else np.zeros_like(normag)
         else:
-            density = samp[normalization] / np.max(samp[normalization])
+            values = samp[normalization]
+            max_density = np.max(values)
+            density = values / max_density if max_density > 0 else np.zeros_like(values)
 
         # Density is now between 0 and 1, giving the probability of keeping each point
         rand = rng.random(density.shape[0])

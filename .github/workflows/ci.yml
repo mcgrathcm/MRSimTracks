@@ -31,3 +31,7 @@ jobs:
 
       - name: Build package
         run: uv build
+
+      - name: Smoke test built wheel
+        run: |
+          uv run --isolated --with dist/mrsimtracks-*.whl python -c "import mrsimtracks as mt; assert 'track' in mt.__all__"
