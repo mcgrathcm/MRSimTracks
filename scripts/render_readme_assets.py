@@ -34,12 +34,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--out-dir", type=Path, default=Path("docs/assets"))
     parser.add_argument("--dt", type=float, default=0.002)
     parser.add_argument("--cycles", type=int, default=3)
-    parser.add_argument("--frames", type=int, default=150)
-    parser.add_argument("--duration-ms", type=int, default=30)
+    parser.add_argument("--frames", type=int, default=110)
+    parser.add_argument("--duration-ms", type=int, default=40)
     parser.add_argument(
         "--animation-scale",
         type=float,
-        default=0.65,
+        default=0.55,
         help="Scale animation frames before writing to reduce README asset size.",
     )
     parser.add_argument(
@@ -51,7 +51,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--webp-quality",
         type=int,
-        default=80,
+        default=70,
         help="Quality setting when writing animated WebP output.",
     )
     parser.add_argument("--inlet-particles", type=int, default=3_200)
