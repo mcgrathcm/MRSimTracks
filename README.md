@@ -8,18 +8,45 @@ particles in a tetrahedral flow domain, advects them through a time-periodic
 velocity field (RK4), and recycles out-of-bounds particles back to the inflow
 boundaries with optional **backflow-aware** reseeding.
 
-## Install
+<p align="center">
+  <img src="docs/assets/ubend_particles.gif" alt="Speed-colored particles tracked through the full pulsatile U-bend example" width="620">
+</p>
 
-From GitHub:
+<p align="center">
+  <img src="docs/assets/ubend_tracks.png" alt="Selected speed-colored particle trajectories through the U-bend" width="47%">
+  <img src="docs/assets/ubend_density_slice.gif" alt="Greyscale center-slice particle animation through the U-bend" width="47%">
+</p>
+
+The images above are rendered from the full U-bend example tracked with
+flux-weighted boundary reseeding over three repeated pulsatile cycles. The
+particle animation and selected trajectories use inlet-seeded particles with jet
+speed coloring; the density animation uses full-volume seeding with a greyscale
+center-slice view.
+
+Regenerate these assets with:
 
 ```bash
-uv add "mrsimtracks @ git+https://github.com/mcgrathcm/MRSimTracks.git"
+uv run python scripts/render_readme_assets.py
+```
+
+## Install
+
+MRSimTracks is currently published on PyPI as a pre-release:
+
+```bash
+uv add "mrsimtracks==0.1.0rc1"
 ```
 
 or with pip:
 
 ```bash
-python -m pip install "mrsimtracks @ git+https://github.com/mcgrathcm/MRSimTracks.git"
+python -m pip install "mrsimtracks==0.1.0rc1"
+```
+
+To install the latest source from GitHub instead:
+
+```bash
+uv add "mrsimtracks @ git+https://github.com/mcgrathcm/MRSimTracks.git"
 ```
 
 For development from a clone:

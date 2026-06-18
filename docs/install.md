@@ -1,9 +1,21 @@
 # Install
 
-From GitHub:
+MRSimTracks is currently published on PyPI as a pre-release:
 
 ```bash
-pip install "mrsimtracks @ git+https://github.com/mcgrathcm/MRSimTracks.git"
+uv add "mrsimtracks==0.1.0rc1"
+```
+
+or with pip:
+
+```bash
+python -m pip install "mrsimtracks==0.1.0rc1"
+```
+
+To install the latest source from GitHub instead:
+
+```bash
+uv add "mrsimtracks @ git+https://github.com/mcgrathcm/MRSimTracks.git"
 ```
 
 For development from a clone:

@@ -34,3 +34,7 @@ ignore/
 .DS_Store
 *.png
 *.gif
+!docs/assets/
+!docs/assets/ubend_density_slice.gif
+!docs/assets/ubend_particles.gif
+!docs/assets/ubend_tracks.png
