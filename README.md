@@ -9,25 +9,10 @@ velocity field (RK4), and recycles out-of-bounds particles back to the inflow
 boundaries with optional **backflow-aware** reseeding.
 
 <p align="center">
-  <img src="docs/assets/ubend_particles.gif" alt="Speed-colored particles tracked through the full pulsatile U-bend example" width="620">
+  <img src="docs/assets/ubend_density_slice.gif" alt="Greyscale center-slice particle animation through the U-bend" width="30%">
+  <img src="docs/assets/ubend_tracks.png" alt="Selected speed-colored particle trajectories through the U-bend" width="30%">
+  <img src="docs/assets/ubend_particles.gif" alt="Speed-colored particles tracked through the full pulsatile U-bend example" width="30%">
 </p>
-
-<p align="center">
-  <img src="docs/assets/ubend_tracks.png" alt="Selected speed-colored particle trajectories through the U-bend" width="47%">
-  <img src="docs/assets/ubend_density_slice.gif" alt="Greyscale center-slice particle animation through the U-bend" width="47%">
-</p>
-
-The images above are rendered from the full U-bend example tracked with
-flux-weighted boundary reseeding over three repeated pulsatile cycles. The
-particle animation and selected trajectories use inlet-seeded particles with jet
-speed coloring; the density animation uses full-volume seeding with a greyscale
-center-slice view.
-
-Regenerate these assets with:
-
-```bash
-uv run python scripts/render_readme_assets.py
-```
 
 ## Install
 
