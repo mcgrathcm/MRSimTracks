@@ -13,7 +13,13 @@ boundaries with optional **backflow-aware** reseeding.
 From GitHub:
 
 ```bash
-pip install "mrsimtracks @ git+https://github.com/mcgrathcm/MRSimTracks.git"
+uv add "mrsimtracks @ git+https://github.com/mcgrathcm/MRSimTracks.git"
+```
+
+or with pip:
+
+```bash
+python -m pip install "mrsimtracks @ git+https://github.com/mcgrathcm/MRSimTracks.git"
 ```
 
 For development from a clone:
@@ -102,54 +108,3 @@ result = mt.track_parallel(
   plane seeding.
 - `flux_waveform()` returns per-cap net flux over the cycle — a conservation /
   validation diagnostic (`Σ caps ≈ 0` for a well-resolved incompressible field).
-
-## Performance
-
-Sampling reuses a cell-tree locator built once, a temporal-coherence tet walk
-(numba) seeded from each particle's previous cell, and fused walk+interpolation.
-`benchmark.py` measures sampling and tracking throughput.
-
-## Development
-
-Normal CI runs against a reduced real-data fixture:
-
-```bash
-uv sync --group dev
-uv run pytest -m "not large" --cov=mrsimtracks --cov-report=term-missing
-```
-
-Full-data validation uses the Git LFS example file and runs only for release
-validation:
-
-```bash
-git lfs pull --include="example/CFD_velocity.vtu"
-uv run pytest -m large
-```
-
-See `CONTRIBUTING.md` for the full development workflow.
-
-## Data
-
-The included CFD fixtures are documented separately in `DATA_LICENSE.md`.
-
-## Documentation
-
-Documentation is built with MkDocs:
-
-```bash
-uv sync --group docs
-uv run --group docs mkdocs build --strict
-```
-
-The GitHub Pages site is deployed from `main`.
-
-## Notes
-
-- Flow meshes are assumed all-tetrahedral and static in time (the field varies,
-  the geometry does not).
-- `.pvd` loading stores one geometry plus one field per frame for static-mesh
-  series, so long time series fit in a few GB instead of tens.
-
-## License
-
-MIT.

@@ -7,14 +7,15 @@ def seed_mesh(mesh, npoints, rng=None):
     """Seed points inside the full mesh bounds.
 
     Args:
-        mesh: PyVista mesh defining the flow domain.
-        npoints: Target number of seed points. The stochastic refinement can
-            return fewer points when the domain is sparse or normalization
+        mesh (pyvista.DataSet): PyVista mesh defining the flow domain.
+        npoints (int): Target number of seed points. The stochastic refinement
+            can return fewer points when the domain is sparse or normalization
             rejects samples.
-        rng: Optional ``numpy.random.Generator`` for repeatable seeding.
+        rng (numpy.random.Generator | None): Optional generator for repeatable
+            seeding.
 
     Returns:
-        Array of seed points with shape ``(n, 3)``.
+        (np.ndarray): Array of seed points with shape ``(n, 3)``.
     """
     bounds = mesh.bounds
     return seed_region(mesh, npoints, bounds, rng=rng)
@@ -23,16 +24,17 @@ def seed_region(mesh, npoints, bounds, normalization=None, rng=None):
     """Seed points inside a bounded region of a mesh.
 
     Args:
-        mesh: PyVista mesh defining the flow domain.
-        npoints: Target number of seed points.
-        bounds: Region bounds in PyVista order
+        mesh (pyvista.DataSet): PyVista mesh defining the flow domain.
+        npoints (int): Target number of seed points.
+        bounds (Sequence[float]): Region bounds in PyVista order
             ``(xmin, xmax, ymin, ymax, zmin, zmax)``.
-        normalization: Optional point-data array name used for stochastic
-            density weighting.
-        rng: Optional ``numpy.random.Generator`` for repeatable seeding.
+        normalization (str | None): Optional point-data array name used for
+            stochastic density weighting.
+        rng (numpy.random.Generator | None): Optional generator for repeatable
+            seeding.
 
     Returns:
-        Array of seed points with shape ``(n, 3)``.
+        (np.ndarray): Array of seed points with shape ``(n, 3)``.
     """
     rng = rng if rng is not None else np.random.default_rng()
     npoints = int(npoints)

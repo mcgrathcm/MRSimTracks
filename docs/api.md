@@ -1,11 +1,37 @@
 # API Reference
 
-::: mrsimtracks
+## Loading
+
+::: mrsimtracks.io.load_flow
     options:
-      members:
-        - load_flow
-        - track
-        - track_parallel
-        - TrackingResult
-        - BoundaryReseeder
-      show_if_no_docstring: true
+      show_root_heading: true
+
+## Tracking
+
+::: mrsimtracks.core.track
+    options:
+      show_root_heading: true
+
+::: mrsimtracks.parallel.track_parallel
+    options:
+      show_root_heading: true
+
+::: mrsimtracks.core.TrackingResult
+    options:
+      show_root_heading: true
+
+## Reseeding
+
+::: mrsimtracks.reseeding.BoundaryReseeder
+    options:
+      show_root_heading: true
+
+## Seeding
+
+::: mrsimtracks.seeding.seed_mesh
+    options:
+      show_root_heading: true
+
+::: mrsimtracks.seeding.seed_region
+    options:
+      show_root_heading: true
