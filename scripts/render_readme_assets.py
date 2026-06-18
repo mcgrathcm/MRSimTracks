@@ -460,13 +460,22 @@ def render_density_gifs(
     webp_quality: int,
 ) -> None:
     rng = np.random.default_rng(seed)
-    centers = np.asarray(flow.active_mesh.cell_centers().points)
-    if n_particles > centers.shape[0]:
-        raise ValueError(f"requested {n_particles} particles, but mesh has {centers.shape[0]} cells")
-    positions = np.ascontiguousarray(
-        centers[rng.choice(centers.shape[0], size=n_particles, replace=False)],
-        dtype=float,
+    # Seed volume-uniformly, weighting each cell by its volume. Sampling cell
+    # centers uniformly would make seed density proportional to cell count per
+    # unit volume (i.e. 1/cell_volume), oversampling the refined boundary-layer
+    # and refinement regions of the CFD mesh and producing spurious density
+    # banding at walls. Volume weighting cancels that so density tracks the
+    # physical distribution, independent of mesh resolution.
+    sized = flow.active_mesh.compute_cell_sizes(length=False, area=False, volume=True)
+    centers = np.asarray(sized.cell_centers().points)
+    cell_volume = np.abs(np.asarray(sized.cell_data["Volume"], dtype=float))
+    total_volume = cell_volume.sum()
+    if total_volume <= 0:
+        raise ValueError("mesh has no positive-volume cells to seed from")
+    cell_choice = rng.choice(
+        centers.shape[0], size=n_particles, replace=True, p=cell_volume / total_volume
     )
+    positions = np.ascontiguousarray(centers[cell_choice], dtype=float)
     print(f"full-volume seeds={positions.shape[0]}")
 
     bounds = np.array(flow.active_mesh.bounds, dtype=float)
