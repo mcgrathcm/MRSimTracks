@@ -6,6 +6,8 @@ This project uses semantic versioning while the public API stabilizes.
 
 ## [Unreleased]
 
+## [0.1.0rc1] - 2026-06-18
+
 - Rename the import package to `mrsimtracks` and narrow the top-level public
   API.
 - Split tracking, parallel execution, flow loading, sampling, seeding, and

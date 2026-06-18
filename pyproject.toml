@@ -15,7 +15,7 @@ packages = ["mrsimtracks"]
 
 [project]
 name = "mrsimtracks"
-version = "0.1.0"
+version = "0.1.0rc1"
 description = "Generate CFD-derived particle trajectories for MR flow simulation."
 readme = "README.md"
 requires-python = ">=3.12"
