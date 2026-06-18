@@ -9,9 +9,9 @@ velocity field (RK4), and recycles out-of-bounds particles back to the inflow
 boundaries with optional **backflow-aware** reseeding.
 
 <p align="center">
-  <img src="docs/assets/ubend_density_slice.gif" alt="Greyscale center-slice particle animation through the U-bend" width="30%">
+  <img src="docs/assets/ubend_density_slice.webp" alt="Greyscale center-slice particle animation through the U-bend" width="30%">
   <img src="docs/assets/ubend_tracks.png" alt="Selected speed-colored particle trajectories through the U-bend" width="30%">
-  <img src="docs/assets/ubend_particles.gif" alt="Speed-colored particles tracked through the full pulsatile U-bend example" width="30%">
+  <img src="docs/assets/ubend_particles.webp" alt="Speed-colored particles tracked through the full pulsatile U-bend example" width="30%">
 </p>
 
 ## Install

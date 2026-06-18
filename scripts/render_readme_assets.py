@@ -6,12 +6,12 @@ This script intentionally uses the full Git LFS example:
 
 The default settings match the README assets:
 
-- inlet-seeded speed-colored particle GIF
+- inlet-seeded speed-colored particle WebP
 - selected inlet-seeded trajectory PNG, cut at reseed boundaries
-- full-volume-seeded grayscale center-slice density GIF
+- full-volume-seeded grayscale center-slice density WebP
 
 Use ``--quick`` for a lower-cost smoke render. Use ``--include-projection`` to
-also render the grayscale all-particle x-z projection-density GIF.
+also render the grayscale all-particle x-z projection-density WebP.
 """
 
 from __future__ import annotations
@@ -36,6 +36,24 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--cycles", type=int, default=3)
     parser.add_argument("--frames", type=int, default=150)
     parser.add_argument("--duration-ms", type=int, default=30)
+    parser.add_argument(
+        "--animation-scale",
+        type=float,
+        default=0.65,
+        help="Scale animation frames before writing to reduce README asset size.",
+    )
+    parser.add_argument(
+        "--gif-colors",
+        type=int,
+        default=96,
+        help="Adaptive palette size when writing GIF output.",
+    )
+    parser.add_argument(
+        "--webp-quality",
+        type=int,
+        default=80,
+        help="Quality setting when writing animated WebP output.",
+    )
     parser.add_argument("--inlet-particles", type=int, default=3_200)
     parser.add_argument("--density-particles", type=int, default=120_000)
     parser.add_argument("--seed", type=int, default=42)
@@ -70,12 +88,14 @@ def crop_white_image(image: Image.Image, pad: int = 34, threshold: int = 248) ->
     return image.crop(box)
 
 
-def crop_white_gif(
+def crop_white_animation(
     path: Path,
     *,
     pad: int = 18,
     threshold: int = 248,
     duration_ms: int = 30,
+    gif_colors: int = 96,
+    webp_quality: int = 80,
 ) -> None:
     im = Image.open(path)
     frames = [frame.convert("RGB") for frame in ImageSequence.Iterator(im)]
@@ -95,23 +115,66 @@ def crop_white_gif(
         )
         frames = [frame.crop(box) for frame in frames]
 
-    save_gif(path, frames, duration_ms=duration_ms)
-
-
-def save_gif(path: Path, frames: list[Image.Image], *, duration_ms: int) -> None:
-    paletted = [
-        frame.convert("P", palette=Image.Palette.ADAPTIVE, colors=128)
-        for frame in frames
-    ]
-    paletted[0].save(
+    save_animation(
         path,
-        save_all=True,
-        append_images=paletted[1:],
-        duration=duration_ms,
-        loop=0,
-        optimize=False,
-        disposal=2,
+        frames,
+        duration_ms=duration_ms,
+        gif_colors=gif_colors,
+        webp_quality=webp_quality,
     )
+
+
+def save_animation(
+    path: Path,
+    frames: list[Image.Image],
+    *,
+    duration_ms: int,
+    scale: float = 1.0,
+    gif_colors: int = 96,
+    webp_quality: int = 80,
+) -> None:
+    if scale <= 0:
+        raise ValueError("scale must be positive")
+    if scale != 1.0:
+        resized = []
+        for frame in frames:
+            width = max(1, int(round(frame.width * scale)))
+            height = max(1, int(round(frame.height * scale)))
+            resized.append(frame.resize((width, height), Image.Resampling.LANCZOS))
+        frames = resized
+    if path.suffix.lower() == ".webp":
+        frames = [frame.convert("RGB") for frame in frames]
+        frames[0].save(
+            path,
+            save_all=True,
+            append_images=frames[1:],
+            duration=duration_ms,
+            loop=0,
+            format="WEBP",
+            quality=webp_quality,
+            method=6,
+            # Force every frame to be a keyframe. Otherwise libwebp encodes long
+            # chains of delta frames, and a decoder (e.g. macOS Preview) must
+            # replay the whole chain to draw a late frame, so playback lags more
+            # and more until the loop resets it. For sparse particle-on-white
+            # content keyframes cost essentially no extra size.
+            kmin=1,
+            kmax=1,
+        )
+    else:
+        paletted = [
+            frame.convert("P", palette=Image.Palette.ADAPTIVE, colors=gif_colors)
+            for frame in frames
+        ]
+        paletted[0].save(
+            path,
+            save_all=True,
+            append_images=paletted[1:],
+            duration=duration_ms,
+            loop=0,
+            optimize=False,
+            disposal=2,
+        )
 
 
 def speed_from_positions(positions: np.ndarray, reset: np.ndarray, dt: float) -> np.ndarray:
@@ -144,6 +207,9 @@ def render_particle_gif(
     frames: int,
     duration_ms: int,
     seed: int,
+    animation_scale: float,
+    gif_colors: int,
+    webp_quality: int,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, float]:
     seeds = reseeder.reseed(n_particles, t=0.0)
     result = mt.track(
@@ -189,8 +255,20 @@ def render_particle_gif(
         images.append(Image.fromarray(plotter.screenshot(return_img=True)))
         plotter.close()
 
-    save_gif(out_path, images, duration_ms=duration_ms)
-    crop_white_gif(out_path, duration_ms=duration_ms)
+    save_animation(
+        out_path,
+        images,
+        duration_ms=duration_ms,
+        scale=animation_scale,
+        gif_colors=gif_colors,
+        webp_quality=webp_quality,
+    )
+    crop_white_animation(
+        out_path,
+        duration_ms=duration_ms,
+        gif_colors=gif_colors,
+        webp_quality=webp_quality,
+    )
     return positions, reset, speed, vmax
 
 
@@ -377,6 +455,9 @@ def render_density_gifs(
     frames: int,
     duration_ms: int,
     seed: int,
+    animation_scale: float,
+    gif_colors: int,
+    webp_quality: int,
 ) -> None:
     rng = np.random.default_rng(seed)
     centers = np.asarray(flow.active_mesh.cell_centers().points)
@@ -435,10 +516,29 @@ def render_density_gifs(
                     render_histogram_frame(positions, x0=x0, x1=x1, z0=z0, z1=z1)
                 )
 
-    save_gif(out_path, slice_frames, duration_ms=duration_ms)
-    crop_white_gif(out_path, duration_ms=duration_ms)
+    save_animation(
+        out_path,
+        slice_frames,
+        duration_ms=duration_ms,
+        scale=animation_scale,
+        gif_colors=gif_colors,
+        webp_quality=webp_quality,
+    )
+    crop_white_animation(
+        out_path,
+        duration_ms=duration_ms,
+        gif_colors=gif_colors,
+        webp_quality=webp_quality,
+    )
     if projection_path is not None and projection_frames is not None:
-        save_gif(projection_path, projection_frames, duration_ms=duration_ms)
+        save_animation(
+            projection_path,
+            projection_frames,
+            duration_ms=duration_ms,
+            scale=animation_scale,
+            gif_colors=gif_colors,
+            webp_quality=webp_quality,
+        )
 
 
 def main() -> None:
@@ -466,13 +566,16 @@ def main() -> None:
         inlet,
         outlet,
         inlet_reseeder,
-        args.out_dir / "ubend_particles.gif",
+        args.out_dir / "ubend_particles.webp",
         dt=args.dt,
         cycles=args.cycles,
         n_particles=args.inlet_particles,
         frames=args.frames,
         duration_ms=args.duration_ms,
         seed=args.seed,
+        animation_scale=args.animation_scale,
+        gif_colors=args.gif_colors,
+        webp_quality=args.webp_quality,
     )
     render_tracks_png(
         flow,
@@ -498,14 +601,17 @@ def main() -> None:
         inlet,
         outlet,
         density_reseeder,
-        args.out_dir / "ubend_density_slice.gif",
-        args.out_dir / "ubend_density_projection.gif" if args.include_projection else None,
+        args.out_dir / "ubend_density_slice.webp",
+        args.out_dir / "ubend_density_projection.webp" if args.include_projection else None,
         dt=args.dt,
         cycles=args.cycles,
         n_particles=args.density_particles,
         frames=args.frames,
         duration_ms=args.duration_ms,
         seed=args.seed + 200,
+        animation_scale=args.animation_scale,
+        gif_colors=args.gif_colors,
+        webp_quality=args.webp_quality,
     )
 
 
