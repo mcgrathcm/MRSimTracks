@@ -25,6 +25,7 @@ numbers. The masked-out fraction is reported alongside.
 import argparse
 import inspect
 import json
+import time
 from pathlib import Path
 
 import h5py
@@ -80,27 +81,52 @@ def run_tracking(flow, seeds, dt, tmax, method, caps, seed):
 # generate
 # --------------------------------------------------------------------------- #
 
+def _subsample(pos, reset, store_every):
+    """Keep one trajectory frame per ``store_every`` integration steps.
+
+    The integration runs at the (small) tracking dt for accuracy; only every
+    ``store_every``-th frame is stored, decoupling accuracy from file size for
+    long horizons. The stored reset flag is the OR over each store window, so no
+    recycling event between stored frames is lost.
+    """
+    if store_every <= 1:
+        return pos, reset
+    n_s = pos.shape[0] // store_every
+    pos_s = pos[store_every - 1::store_every][:n_s]
+    reset_s = reset[:n_s * store_every].reshape(n_s, store_every, -1).any(axis=1)
+    return np.ascontiguousarray(pos_s), np.ascontiguousarray(reset_s)
+
+
 def generate(args):
     flow = _load_flow(args.flow, args.active_key, args.precision)
     tmax = flow.tmax if args.tmax is None else args.tmax
     caps = [] if args.no_reseed else args.caps
     seeds = cell_center_seeds(flow, args.n)
 
+    n_steps = int(round(tmax / args.dt))
+    stored_dt = args.dt * args.store_every
     print(f"GT: dt={args.dt:g} method={args.method} precision={args.precision} "
-          f"tmax={tmax:g} -> {int(round(tmax/args.dt))} steps, {args.n} particles")
+          f"tmax={tmax:g} -> {n_steps} steps, {args.n} particles "
+          f"(store every {args.store_every} -> stored dt={stored_dt:g})")
+    t0 = time.perf_counter()
     pos, reset = run_tracking(flow, seeds, args.dt, tmax, args.method, caps, args.seed)
+    pos, reset = _subsample(pos, reset, args.store_every)
+    elapsed = time.perf_counter() - t0
 
     with h5py.File(args.out, "w") as f:
         f.create_dataset("position", data=pos, compression="gzip")
         f.create_dataset("reset", data=reset, compression="gzip")
         f.create_dataset("seeds", data=seeds)
-        f.attrs.update(dt=args.dt, tmax=tmax, method=args.method,
+        f.attrs.update(dt=stored_dt, integration_dt=args.dt,
+                       store_every=args.store_every, tmax=tmax, method=args.method,
                        precision=args.precision, n_particles=args.n,
                        active_key=args.active_key, flow=str(args.flow),
                        reseeded=not args.no_reseed, seed=args.seed)
     reset_frac = float(reset.mean())
-    print(f"wrote {args.out}  ({pos.shape[0]} steps x {pos.shape[1]} particles, "
-          f"reset_fraction={reset_frac:.3f})")
+    ever = float(reset.any(axis=0).mean())
+    print(f"wrote {args.out}  ({pos.shape[0]} stored frames x {pos.shape[1]} "
+          f"particles, reset_fraction={reset_frac:.3f}, "
+          f"ever_recycled={ever:.2f}) in {elapsed:.1f}s")
 
 
 # --------------------------------------------------------------------------- #
@@ -229,6 +255,9 @@ def main():
     g.add_argument("--dt", type=float, default=1e-4, help="GT timestep (small)")
     g.add_argument("--tmax", type=float, default=None, help="default: one flow period")
     g.add_argument("--n", type=int, default=256, help="number of particles")
+    g.add_argument("--store-every", type=int, default=1,
+                   help="store one trajectory frame per N integration steps "
+                        "(decouples accuracy from file size for long runs)")
     g.add_argument("--out", type=Path, default="ground_truth.h5")
     _add_common(g)
     g.set_defaults(func=generate)
