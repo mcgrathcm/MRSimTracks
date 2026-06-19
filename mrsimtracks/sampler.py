@@ -12,6 +12,43 @@ except ImportError:                       # numba is optional; numpy path still 
 
 VTK_TETRA = 10
 
+# Single (f32) vs double (f64) precision for the sampling/advection math. f32
+# roughly halves the memory bandwidth of the velocity field and per-cell affine
+# maps -- the loop's dominant cost -- at the price of a looser geometric
+# tolerance. Geometry-only precompute (the matrix inverse) stays in f64.
+_FLOAT_DTYPES = {
+    "f32": np.dtype(np.float32), "float32": np.dtype(np.float32),
+    "single": np.dtype(np.float32),
+    "f64": np.dtype(np.float64), "float64": np.dtype(np.float64),
+    "double": np.dtype(np.float64),
+}
+
+# Walk/inside-test tolerances scaled to each dtype's machine epsilon: f64
+# barycentric coords are good to ~1e-15, f32 only to ~1e-7, so f32 needs a much
+# looser band to count points sitting on a shared face as "inside" (otherwise
+# they spuriously fall through to the locator probe every step).
+_WALK_TOL = {np.dtype(np.float64): 1e-10, np.dtype(np.float32): 1e-5}
+_WALK_SLACK = {np.dtype(np.float64): 1e-7, np.dtype(np.float32): 1e-4}
+
+
+def resolve_float_dtype(precision):
+    """Map a precision spec to a numpy float dtype (``np.float32``/``np.float64``).
+
+    Accepts ``"f32"``/``"f64"`` (and ``float32``/``single``/``float64``/``double``
+    aliases) or any numpy float32/float64 dtype-like.
+    """
+    if isinstance(precision, str):
+        try:
+            return _FLOAT_DTYPES[precision.lower()]
+        except KeyError:
+            raise ValueError(
+                f"precision must be one of {sorted(_FLOAT_DTYPES)}, got {precision!r}"
+            ) from None
+    dt = np.dtype(precision)
+    if dt not in (np.dtype(np.float32), np.dtype(np.float64)):
+        raise ValueError(f"precision must be float32 or float64, got {precision!r}")
+    return dt
+
 
 if _HAVE_NUMBA:
     @njit(parallel=True, cache=True)
@@ -118,23 +155,31 @@ class _TetSampler:
     precomputed once per cell. Falls back to ``ok=False`` for non-tet meshes.
     """
 
-    def __init__(self, mesh):
+    def __init__(self, mesh, dtype=np.float64):
+        # Working precision for the sampling/advection math (points, velocity,
+        # per-cell affine maps). Geometry precompute below stays in f64.
+        self.dtype = np.dtype(dtype)
+        self.tol = _WALK_TOL[self.dtype]
+        self.slack = _WALK_SLACK[self.dtype]
+
         self.ok = bool(np.all(np.asarray(mesh.celltypes) == VTK_TETRA))
         if not self.ok:
             return
 
         # Tet connectivity (n_cells, 4) and node coordinates -- precomputed once.
         self.conn = mesh.cells.reshape(-1, 5)[:, 1:].copy()
-        self.node_xyz = np.asarray(mesh.points)
+        self.node_xyz = np.asarray(mesh.points, dtype=np.float64)
 
         # Per-cell affine map xyz -> barycentric: l123 = Minv @ (p - d), where d
         # is the 4th vertex. Precomputed once so both the walk and interpolation
-        # are matrix-vector products (no per-call linear solve).
+        # are matrix-vector products (no per-call linear solve). The inverse is
+        # taken in f64 for conditioning, then stored at the working precision.
         vx = self.node_xyz[self.conn]                       # (nc, 4, 3)
-        self._d = np.ascontiguousarray(vx[:, 3, :])         # (nc, 3)
-        T = np.stack([vx[:, 0] - self._d, vx[:, 1] - self._d,
-                      vx[:, 2] - self._d], axis=2)           # (nc, 3, 3)
-        self._Minv = np.ascontiguousarray(np.linalg.inv(T))
+        d = np.ascontiguousarray(vx[:, 3, :])               # (nc, 3)
+        T = np.stack([vx[:, 0] - d, vx[:, 1] - d,
+                      vx[:, 2] - d], axis=2)                 # (nc, 3, 3)
+        self._d = np.ascontiguousarray(d, dtype=self.dtype)
+        self._Minv = np.ascontiguousarray(np.linalg.inv(T), dtype=self.dtype)
 
         # Tet face adjacency: adj[c, i] is the cell sharing the face opposite
         # local vertex i of cell c (-1 on a domain boundary). Built by matching
@@ -195,13 +240,15 @@ class _TetSampler:
         valid = np.asarray(out.point_data["vtkValidPointMask"]).astype(bool)
         return cid, valid
 
-    def locate(self, points_xyz, guess=None, tol=1e-10, max_iter=20):
+    def locate(self, points_xyz, guess=None, tol=None, max_iter=20):
         """Return the containing cell id per point (-1 if outside the domain).
 
         With ``guess`` (previous cell per particle), walk across tet faces from
         the guess; otherwise do a full locator query. Particles that exit the
         domain or do not converge fall back to the locator.
         """
+        if tol is None:
+            tol = self.tol
         n = points_xyz.shape[0]
         if guess is None:
             cid, valid = self._locate_probe(points_xyz)
@@ -245,13 +292,18 @@ class _TetSampler:
         w = self._bary(points_xyz, cells_safe)
         return np.einsum("nij,ni->nj", vel[self.conn[cells_safe]], w)
 
-    def sample(self, points_xyz, vel, guess=None, tol=1e-10, slack=1e-7, max_iter=20):
+    def sample(self, points_xyz, vel, guess=None, tol=None, slack=None, max_iter=20):
         """Return (velocity (n,3), valid (n,), cells (n,)) for points in the field.
 
         ``cells`` is the resolved containing cell per point (-1 if outside),
         suitable to feed back as ``guess`` on the next call for the walk.
         """
-        points_xyz = np.ascontiguousarray(points_xyz, dtype=np.float64)
+        if tol is None:
+            tol = self.tol
+        if slack is None:
+            slack = self.slack
+        points_xyz = np.ascontiguousarray(points_xyz, dtype=self.dtype)
+        vel = np.ascontiguousarray(vel, dtype=self.dtype)
 
         # Cold path (no guess) or no numba: locate via the probe, interpolate in numpy.
         if guess is None or not _HAVE_NUMBA:
@@ -264,9 +316,8 @@ class _TetSampler:
         # Fast path: fused walk + interpolation in one numba kernel; only the
         # particles it couldn't resolve (boundary/non-converged/no-guess) hit the
         # locator probe.
-        vel = np.ascontiguousarray(vel, dtype=np.float64)
         n = points_xyz.shape[0]
-        v = np.zeros((n, vel.shape[1]))
+        v = np.zeros((n, vel.shape[1]), dtype=self.dtype)
         cells = np.empty(n, dtype=np.int64)
         status = np.empty(n, dtype=np.int8)
         _walk_interp_kernel(points_xyz, self._Minv, self._d, self._conn64, self._adj,
