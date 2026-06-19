@@ -1,5 +1,3 @@
-from pathlib import Path
-
 import numpy as np
 
 import mrsimtracks as pt
@@ -8,12 +6,8 @@ from diagnostics import (
     deterministic_cell_center_seeds,
     trajectory_stats,
 )
+from fixture_paths import INLET, OUTLET, SMALL_FLOW
 
-
-DATA = Path(__file__).parent / "data"
-SMALL_FLOW = DATA / "CFD_velocity_00190_00210.vtu"
-INLET = DATA / "Inlet.vtp"
-OUTLET = DATA / "Outlet.vtp"
 RNG_SEED = 1234
 DT = 0.002
 TMAX = 0.012

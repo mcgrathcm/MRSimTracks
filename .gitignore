@@ -21,6 +21,8 @@ ignore/
 *.hdf5
 !example/CFD_velocity.vtu
 !tests/data/*.vtu
+# committed regression references (see test_ground_truth_regression)
+!tests/data/ground_truth*.h5
 
 # Benchmark artifacts
 *.json

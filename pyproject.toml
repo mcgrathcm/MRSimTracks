@@ -8,6 +8,7 @@ exclude = [
     "/example/*.vtp",
     "/tests/data/*.vtu",
     "/tests/data/*.vtp",
+    "/tests/data/*.h5",
 ]
 
 [tool.hatch.build.targets.wheel]

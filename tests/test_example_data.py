@@ -1,19 +1,19 @@
-from pathlib import Path
-
 import h5py
 import numpy as np
 import pytest
 
 import mrsimtracks as pt
+from fixture_paths import (
+    FULL_FLOW,
+    INLET,
+    OUTLET,
+    SMALL_FLOW,
+    full_flow_available,
+)
 
-
-DATA = Path(__file__).parent / "data"
-SMALL_FLOW = DATA / "CFD_velocity_00190_00210.vtu"
-INLET = DATA / "Inlet.vtp"
-OUTLET = DATA / "Outlet.vtp"
-FULL_FLOW = Path(__file__).parents[1] / "example" / "CFD_velocity.vtu"
-FULL_INLET = Path(__file__).parents[1] / "example" / "Inlet.vtp"
-FULL_OUTLET = Path(__file__).parents[1] / "example" / "Outlet.vtp"
+# The caps are one shared geometry; the full flow reuses the same surfaces.
+FULL_INLET = INLET
+FULL_OUTLET = OUTLET
 
 
 def test_small_fixture_loads_expected_time_window():
@@ -123,7 +123,7 @@ def test_boundary_reseeder_accepts_string_paths():
 
 @pytest.mark.large
 def test_full_lfs_fixture_tracks_with_boundary_reseeding():
-    if FULL_FLOW.stat().st_size < 100_000_000:
+    if not full_flow_available():
         pytest.skip("full example VTU was not fetched through Git LFS")
 
     flow = pt.load_flow(FULL_FLOW, active_key="Velocity", pbar=False)

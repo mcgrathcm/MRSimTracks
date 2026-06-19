@@ -28,6 +28,26 @@ def deterministic_cell_center_seeds(flow, n_particles=512):
     return np.ascontiguousarray(centers[idx])
 
 
+def aligned_trajectory_error(gt_pos, gt_reset, cand_pos, cand_reset, k):
+    """Per-step displacement error of a candidate run vs a ground-truth run.
+
+    GT output step ``i`` holds the position at time ``(i+1)*dt_gt``; a candidate
+    with ``dt_cand = k*dt_gt`` has step ``j`` at GT step ``(j+1)*k - 1``, so the
+    GT is subsampled on that stride and compared element-wise.
+
+    Particles recycled out-of-bounds in either run (cumulatively, at or before a
+    step) are masked to ``NaN`` so reseeding nondeterminism never enters the
+    metric. Returns the ``(n_cand, n_particles)`` error array (NaN where masked).
+    """
+    n_cand = cand_pos.shape[0]
+    gt_al = gt_pos[k - 1::k][:n_cand]
+    gt_rst = gt_reset[k - 1::k][:n_cand]
+    assert gt_al.shape == cand_pos.shape, (gt_al.shape, cand_pos.shape)
+    clean = (np.cumsum(gt_rst, axis=0) + np.cumsum(cand_reset, axis=0)) == 0
+    err = np.linalg.norm(cand_pos - gt_al, axis=2)
+    return np.where(clean, err, np.nan)
+
+
 def trajectory_stats(result, initial_positions, movement_eps=1e-4):
     final = result.positions[-1]
     displacement = np.linalg.norm(final - initial_positions, axis=1)
