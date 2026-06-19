@@ -23,21 +23,20 @@ exactly) and far below any real behavioral change. If a legitimate algorithm
 change shifts results, regenerate with ``scripts/ground_truth.py generate``.
 """
 
-from pathlib import Path
-
 import h5py
 import numpy as np
 import pytest
 
 import mrsimtracks as pt
 from diagnostics import aligned_trajectory_error
-
-DATA = Path(__file__).parent / "data"
-SMALL_GT = DATA / "ground_truth.h5"
-FULL_GT = DATA / "ground_truth_full.h5"
-SMALL_FLOW = DATA / "CFD_velocity_00190_00210.vtu"
-FULL_FLOW = Path(__file__).parents[1] / "example" / "CFD_velocity.vtu"
-CAPS = [DATA / "Inlet.vtp", DATA / "Outlet.vtp"]
+from fixture_paths import (
+    CAPS,
+    FULL_FLOW,
+    FULL_GT,
+    SMALL_FLOW,
+    SMALL_GT,
+    full_flow_available,
+)
 
 # Same-machine reproduction is ~0; these bound cross-platform float noise while
 # staying orders of magnitude below the error of any real behavioral change.
@@ -118,7 +117,7 @@ def test_tracking_reproduces_small_ground_truth():
 
 @pytest.mark.large
 def test_tracking_reproduces_full_cycle_ground_truth():
-    if FULL_FLOW.stat().st_size < 100_000_000:
+    if not full_flow_available():
         pytest.skip("full example VTU was not fetched through Git LFS")
 
     gt_pos, gt_reset, seeds, attrs = _load_gt(FULL_GT)

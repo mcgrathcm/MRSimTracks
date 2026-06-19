@@ -10,7 +10,7 @@ import mrsimtracks as mt
 from mrsimtracks.seeding import seed_mesh
 
 FLOW = "tests/data/CFD_velocity_00190_00210.vtu"
-CAPS = ["tests/data/Inlet.vtp", "tests/data/Outlet.vtp"]
+CAPS = ["example/Inlet.vtp", "example/Outlet.vtp"]
 
 # 1. Load the time-resolved flow field (.vtu single-file or .pvd series; auto-detected).
 flow = mt.load_flow(FLOW, active_key="Velocity")
@@ -31,9 +31,8 @@ print(f"total resets: {int(result.reset.sum())}")
 result.save("tracks.h5")
 print("saved tracks.h5")
 
-# --- Full-cycle data lives in example/CFD_velocity.vtu via Git LFS. ---
+# --- Full-cycle data lives in example/CFD_velocity.vtu via Git LFS (same caps). ---
 # FLOW = "example/CFD_velocity.vtu"
-# CAPS = ["example/Inlet.vtp", "example/Outlet.vtp"]
 
 # --- Large runs: spread across processes (each worker reloads the field) ---
 # result = mt.track_parallel(

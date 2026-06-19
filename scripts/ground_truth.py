@@ -33,9 +33,10 @@ import numpy as np
 
 import mrsimtracks as mt
 
-DATA = Path(__file__).parents[1] / "tests" / "data"
-DEFAULT_FLOW = DATA / "CFD_velocity_00190_00210.vtu"
-DEFAULT_CAPS = [DATA / "Inlet.vtp", DATA / "Outlet.vtp"]
+ROOT = Path(__file__).parents[1]
+DEFAULT_FLOW = ROOT / "tests" / "data" / "CFD_velocity_00190_00210.vtu"
+# Caps live only in example/ (one shared geometry for both flows).
+DEFAULT_CAPS = [ROOT / "example" / "Inlet.vtp", ROOT / "example" / "Outlet.vtp"]
 DEFAULT_ACTIVE_KEY = "Velocity"
 
 

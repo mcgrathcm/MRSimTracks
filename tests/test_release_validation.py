@@ -15,12 +15,10 @@ from diagnostics import (
     subset_particle_stats,
     trajectory_stats,
 )
+from fixture_paths import FULL_FLOW, full_flow_available
+from fixture_paths import INLET as FULL_INLET
+from fixture_paths import OUTLET as FULL_OUTLET
 
-
-ROOT = Path(__file__).parents[1]
-FULL_FLOW = ROOT / "example" / "CFD_velocity.vtu"
-FULL_INLET = ROOT / "example" / "Inlet.vtp"
-FULL_OUTLET = ROOT / "example" / "Outlet.vtp"
 RNG_SEED = 1234
 DT = 0.002
 N_PARTICLES = 256
@@ -34,7 +32,7 @@ def _metrics_path(name):
 
 @pytest.mark.large
 def test_full_cycle_stability_and_metrics():
-    if FULL_FLOW.stat().st_size < 100_000_000:
+    if not full_flow_available():
         pytest.skip("full example VTU was not fetched through Git LFS")
 
     t0 = time.perf_counter()

@@ -8,11 +8,12 @@ validation.
 - `example/CFD_velocity.vtu`: full-cycle time-resolved CFD velocity field,
   tracked with Git LFS.
 - `example/Inlet.vtp`, `example/Outlet.vtp`, `example/Wall.vtp`: boundary
-  surfaces for the full example case.
+  surfaces. The inlet/outlet caps are one shared geometry used with both the
+  full and the reduced flow (kept in a single location to avoid duplication).
 - `tests/data/CFD_velocity_00190_00210.vtu`: reduced fixture derived from
   frames 190-210 of the full example velocity field for normal CI.
-- `tests/data/Inlet.vtp`, `tests/data/Outlet.vtp`: cap surfaces used with the
-  reduced fixture.
+- `tests/data/ground_truth.h5`, `tests/data/ground_truth_full.h5`: committed
+  reference trajectories for the numerical-drift regression tests.
 
 ## Intended Use
 
