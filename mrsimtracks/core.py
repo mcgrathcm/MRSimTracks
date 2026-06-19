@@ -135,7 +135,7 @@ class TrackingResult:
 
 
 class _HDF5TrackWriter:
-    def __init__(self, path, n_steps, n_particles, dt):
+    def __init__(self, path, n_steps, n_particles, dt, dtype=np.float64):
         import h5py
 
         self.path = Path(path)
@@ -143,7 +143,7 @@ class _HDF5TrackWriter:
         self.positions = self.file.create_dataset(
             "position",
             shape=(n_steps, n_particles, 3),
-            dtype=np.float64,
+            dtype=dtype,
             chunks=_hdf5_chunks((n_steps, n_particles, 3)),
         )
         self.reset = self.file.create_dataset(
@@ -210,15 +210,19 @@ def _track_particles(flow_mesh, initial_seeds: pv.PolyData, reset_points: np.nda
     if n_steps < 1:
         raise ValueError("tmax must be at least one dt")
 
+    # Carry positions/velocities at the flow's working precision (f32 or f64) so
+    # the advection inherits the same speedup as the field sampling.
+    dtype = np.dtype(getattr(flow_mesh, "dtype", np.float64))
+
     # Positions are carried as a plain (n, 3) array; sample_v works on numpy
     # directly, so we avoid wrapping/unwrapping a PolyData every substep.
-    r = np.ascontiguousarray(initial_seeds.points, dtype=float).copy()
+    r = np.ascontiguousarray(initial_seeds.points, dtype=dtype).copy()
     n_particles = r.shape[0]
     if n_particles < 1:
         raise ValueError("provide at least one seed point")
 
     if step_writer is None:
-        positions = np.zeros((n_steps, n_particles, 3))
+        positions = np.zeros((n_steps, n_particles, 3), dtype=dtype)
         reset_flags = np.zeros((n_steps, n_particles), dtype=bool)
     else:
         positions = None
@@ -364,7 +368,9 @@ def track(flow, seeds=None, dt=1e-3, tmax=None, reseeder=None, inlet=None,
     writer = None
     try:
         if output_path is not None:
-            writer = _HDF5TrackWriter(output_path, n_steps, seeds.n_points, dt)
+            writer = _HDF5TrackWriter(
+                output_path, n_steps, seeds.n_points, dt,
+                dtype=np.dtype(getattr(flow, "dtype", np.float64)))
         pos, reset = _track_particles(
             flow, seeds, inlet_arr, dt, tmax, method=method, pbar=pbar,
             metrics=metrics, reseeder=reseeder, rng=rng, step_writer=writer)

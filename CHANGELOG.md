@@ -6,6 +6,10 @@ This project uses semantic versioning while the public API stabilizes.
 
 ## [Unreleased]
 
+- Add a `precision` option (`"f64"` default, `"f32"` single) to `load_flow` and
+  `track_parallel` that runs the field sampling and advection in single
+  precision for a speedup, carrying positions/output at the same precision.
+
 ## [0.1.0rc1] - 2026-06-18
 
 - Rename the import package to `mrsimtracks` and narrow the top-level public

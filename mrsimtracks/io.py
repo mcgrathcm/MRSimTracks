@@ -10,7 +10,7 @@ import pyvista as pv
 from tqdm.auto import tqdm
 from vtkmodules.vtkCommonDataModel import vtkStaticCellLocator
 
-from .sampler import _TetSampler, _sample_v_fallback
+from .sampler import _TetSampler, _sample_v_fallback, resolve_float_dtype
 
 
 def _read_vtu(filepath, active_key, pbar):
@@ -42,8 +42,10 @@ class SingleVTUFlow:
     the chosen ``active_key``.
     """
 
-    def __init__(self, filepath, active_key="velocity", pbar=False, only_active_key=False):
+    def __init__(self, filepath, active_key="velocity", pbar=False,
+                 only_active_key=False, precision="f64"):
         self.filepath = filepath
+        self.dtype = resolve_float_dtype(precision)
         if only_active_key:
             self.mesh = _read_vtu(filepath, active_key, pbar)
         else:
@@ -70,6 +72,14 @@ class SingleVTUFlow:
         self.times_shift_s = (self.times - self.times[0])/1000
         self.tmax = self.times_shift_s.max()
 
+        # Store the per-timestep velocity arrays at the working precision so the
+        # sampler reads them without a per-call cast (the field dominates the
+        # loop's memory bandwidth).
+        for key in self._mesh_keys:
+            arr = self.mesh.point_data[key]
+            if arr.dtype != self.dtype:
+                self.mesh.point_data[key] = arr.astype(self.dtype)
+
         # Set up active mesh
         self.active_mesh = self.mesh.copy()
         self.active_mesh.clear_point_data()
@@ -83,7 +93,7 @@ class SingleVTUFlow:
         self.locator.BuildLocator()
 
         # Fast tet sampler (locator built once, reused across all calls)
-        self._sampler = _TetSampler(self.active_mesh)
+        self._sampler = _TetSampler(self.active_mesh, dtype=self.dtype)
 
     def _get_mesh_key(self, index):
         return self._mesh_keys[index]
@@ -93,7 +103,9 @@ class SingleVTUFlow:
 
         ind_next = np.argmax((self.times_shift_s - time_wrapped) > 0)
         ind_prev = ind_next - 1
-        weight_next = (time_wrapped - self.times_shift_s[ind_prev]) / (self.times_shift_s[ind_next] - self.times_shift_s[ind_prev])
+        # Plain python float so the in-time blend below stays at the field's
+        # precision (a numpy float64 scalar would upcast an f32 field to f64).
+        weight_next = float((time_wrapped - self.times_shift_s[ind_prev]) / (self.times_shift_s[ind_next] - self.times_shift_s[ind_prev]))
 
         tol = 0.001 # Tolerance of 0.1% of dt
 
@@ -129,10 +141,12 @@ class SingleVTUFlow:
 class PVDFlow:
     """Time-resolved ``.pvd`` flow that stores one full mesh per timestep."""
 
-    def __init__(self, filepath, dt=None, active_key="velocity", pbar=True, subsamp=1):
+    def __init__(self, filepath, dt=None, active_key="velocity", pbar=True,
+                 subsamp=1, precision="f64"):
         if subsamp < 1:
             raise ValueError("subsamp must be >= 1")
 
+        self.dtype = resolve_float_dtype(precision)
         self.reader = pv.get_reader(filepath)
         self.times = np.array(self.reader.time_values)
         if subsamp > 1:
@@ -150,6 +164,10 @@ class PVDFlow:
                 raise ValueError(
                     f"point-data array {active_key!r} not found at timestep {t}"
                 )
+            # Carry the velocity field at the working precision.
+            arr = mesh.point_data[active_key]
+            if arr.dtype != self.dtype:
+                mesh.point_data[active_key] = arr.astype(self.dtype)
             self.meshes.append(mesh)
 
         self.tmax = np.max(self.times)
@@ -167,7 +185,7 @@ class PVDFlow:
         self.locator.BuildLocator()
 
         # Fast tet sampler (locator built once, reused across all calls)
-        self._sampler = _TetSampler(self.active_mesh)
+        self._sampler = _TetSampler(self.active_mesh, dtype=self.dtype)
 
     def set_active_time(self, time):
 
@@ -177,7 +195,8 @@ class PVDFlow:
 
         ind_next = np.argmax((self.times_shift_s - time_wrapped) > 0)
         ind_prev = ind_next - 1
-        weight_next = (time_wrapped - self.times_shift_s[ind_prev]) / (self.times_shift_s[ind_next] - self.times_shift_s[ind_prev])
+        # Plain python float so the blend stays at the field's precision.
+        weight_next = float((time_wrapped - self.times_shift_s[ind_prev]) / (self.times_shift_s[ind_next] - self.times_shift_s[ind_prev]))
 
         tol = 0.001
 
@@ -235,9 +254,11 @@ class StaticPVDFlow:
     sample_v / get_mesh interface.
     """
 
-    def __init__(self, filepath, dt=None, active_key="velocity", pbar=True, subsamp=1):
+    def __init__(self, filepath, dt=None, active_key="velocity", pbar=True,
+                 subsamp=1, precision="f64"):
         if subsamp < 1:
             raise ValueError("subsamp must be >= 1")
+        self.dtype = resolve_float_dtype(precision)
         entries = _parse_pvd(filepath)
         self.times = np.array([e[0] for e in entries])
         files = [e[1] for e in entries]
@@ -257,7 +278,8 @@ class StaticPVDFlow:
                 raise ValueError(f"point-data array {active_key!r} not found in {f}")
             if geom is None:
                 geom = m
-            self.fields.append(np.ascontiguousarray(m.point_data[active_key]))
+            self.fields.append(
+                np.ascontiguousarray(m.point_data[active_key], dtype=self.dtype))
 
         self.times_shift_s = self.times - self.times[0]
         if dt is not None:
@@ -272,14 +294,15 @@ class StaticPVDFlow:
         self.locator.BuildLocator()
 
         # Fast tet sampler (locator built once, reused across all calls)
-        self._sampler = _TetSampler(self.active_mesh)
+        self._sampler = _TetSampler(self.active_mesh, dtype=self.dtype)
 
     def set_active_time(self, time):
         time_wrapped = time % self.tmax
 
         ind_next = np.argmax((self.times_shift_s - time_wrapped) > 0)
         ind_prev = ind_next - 1
-        weight_next = (time_wrapped - self.times_shift_s[ind_prev]) / (self.times_shift_s[ind_next] - self.times_shift_s[ind_prev])
+        # Plain python float so the blend stays at the field's precision.
+        weight_next = float((time_wrapped - self.times_shift_s[ind_prev]) / (self.times_shift_s[ind_next] - self.times_shift_s[ind_prev]))
 
         tol = 0.001
 
@@ -310,7 +333,8 @@ class StaticPVDFlow:
 
 
 
-def load_flow(path, active_key="velocity", subsamp=1, only_active_key=True, pbar=False, dt=None):
+def load_flow(path, active_key="velocity", subsamp=1, only_active_key=True,
+              pbar=False, dt=None, precision="f64"):
     """Load a time-resolved flow field, picking the right reader for the file type.
 
     ``.vtu`` inputs are interpreted as one static mesh with one velocity array
@@ -327,6 +351,10 @@ def load_flow(path, active_key="velocity", subsamp=1, only_active_key=True, pbar
             arrays.
         pbar (bool): Show reader progress.
         dt (float | None): Optional timestep scale for ``.pvd`` time values.
+        precision (str): Working precision for the sampling/advection math,
+            ``"f64"`` (default, double) or ``"f32"`` (single -- roughly halves
+            the field's memory bandwidth for a speedup, at a looser geometric
+            tolerance and reduced trajectory accuracy).
 
     Returns:
         (Union[SingleVTUFlow, StaticPVDFlow]): A flow object compatible with
@@ -335,8 +363,8 @@ def load_flow(path, active_key="velocity", subsamp=1, only_active_key=True, pbar
     ext = str(path).rsplit(".", 1)[-1].lower()
     if ext == "vtu":
         return SingleVTUFlow(path, active_key=active_key, pbar=pbar,
-                             only_active_key=only_active_key)
+                             only_active_key=only_active_key, precision=precision)
     if ext == "pvd":
         return StaticPVDFlow(path, active_key=active_key, pbar=pbar,
-                             subsamp=subsamp, dt=dt)
+                             subsamp=subsamp, dt=dt, precision=precision)
     raise ValueError(f"unsupported flow file type: .{ext} (expected .vtu or .pvd)")
