@@ -35,6 +35,86 @@ def _read_vtu(filepath, active_key, pbar):
     return reader.read()
 
 
+_TIME_INTERP = ("linear", "cubic")
+
+
+def resolve_time_interp(time_interp):
+    """Validate the temporal interpolation mode (``"linear"`` or ``"cubic"``)."""
+    if time_interp not in _TIME_INTERP:
+        raise ValueError(
+            f"time_interp must be one of {_TIME_INTERP}, got {time_interp!r}")
+    return time_interp
+
+
+def _catmull_rom(p0, p1, p2, p3, s):
+    """Uniform Catmull-Rom spline value at local parameter ``s`` in [0, 1].
+
+    Interpolates the smooth segment between knots ``p1`` and ``p2`` using the
+    neighbours ``p0`` and ``p3`` to estimate the endpoint tangents. Reproduces
+    each knot exactly (s=0 -> p1, s=1 -> p2). ``s`` is a python float so an f32
+    field stays f32.
+
+    Uses scalar basis weights (not array-valued coefficients) so each frame is
+    touched by a single scalar-times-array multiply -- only ~2x the linear blend
+    rather than the many full-field temporaries a Horner form allocates.
+    """
+    s2 = s * s
+    s3 = s2 * s
+    w0 = 0.5 * (-s + 2.0 * s2 - s3)
+    w1 = 0.5 * (2.0 - 5.0 * s2 + 3.0 * s3)
+    w2 = 0.5 * (s + 4.0 * s2 - 3.0 * s3)
+    w3 = 0.5 * (-s2 + s3)
+    return w0 * p0 + w1 * p1 + w2 * p2 + w3 * p3
+
+
+def _periodic_distinct_count(get_frame, n_frames):
+    """Number of distinct frames per period.
+
+    A pulsatile series often stores the period's closing frame as a duplicate of
+    the opening one; if so it is dropped from the periodic wrap so cubic
+    interpolation across the cycle boundary doesn't see a repeated knot.
+    """
+    f0 = np.asarray(get_frame(0))
+    fn = np.asarray(get_frame(n_frames - 1))
+    scale = float(np.abs(f0).max()) or 1.0
+    dup = np.allclose(f0, fn, rtol=1e-3, atol=1e-3 * scale)
+    return n_frames - 1 if dup else n_frames
+
+
+def _require_uniform_spacing(times_shift_s, mode):
+    """Cubic interpolation assumes uniform frame spacing -- check it once."""
+    if mode == "cubic":
+        d = np.diff(np.asarray(times_shift_s, dtype=float))
+        if d.size and not np.allclose(d, d[0], rtol=1e-6, atol=1e-12):
+            raise ValueError(
+                "time_interp='cubic' requires uniformly spaced time frames")
+
+
+def _interp_time(times_shift_s, tmax, n_distinct, get_frame, time, mode,
+                 tol=1e-3):
+    """Interpolate the nodal field at ``time`` (periodic) with ``mode``.
+
+    ``get_frame(i)`` returns the nodal velocity array for frame index ``i``.
+    Linear reproduces the legacy two-frame blend exactly; cubic uses a uniform
+    Catmull-Rom across four frames, wrapping neighbours periodically.
+    """
+    tw = time % tmax
+    inext = int(np.argmax((times_shift_s - tw) > 0))
+    iprev = inext - 1
+    s = float((tw - times_shift_s[iprev])
+              / (times_shift_s[inext] - times_shift_s[iprev]))
+
+    if s < tol:
+        return get_frame(iprev)
+    if s > 1 - tol:
+        return get_frame(inext)
+    if mode == "cubic":
+        nd = n_distinct
+        return _catmull_rom(get_frame((iprev - 1) % nd), get_frame(iprev % nd),
+                            get_frame(inext % nd), get_frame((inext + 1) % nd), s)
+    return (1.0 - s) * get_frame(iprev) + s * get_frame(inext)
+
+
 class SingleVTUFlow:
     """Single ``.vtu`` flow file with one static mesh and time-indexed arrays.
 
@@ -43,9 +123,10 @@ class SingleVTUFlow:
     """
 
     def __init__(self, filepath, active_key="velocity", pbar=False,
-                 only_active_key=False, precision="f64"):
+                 only_active_key=False, precision="f64", time_interp="linear"):
         self.filepath = filepath
         self.dtype = resolve_float_dtype(precision)
+        self.time_interp = resolve_time_interp(time_interp)
         if only_active_key:
             self.mesh = _read_vtu(filepath, active_key, pbar)
         else:
@@ -71,6 +152,8 @@ class SingleVTUFlow:
         self._mesh_keys = [item[1] for item in time_keys]
         self.times_shift_s = (self.times - self.times[0])/1000
         self.tmax = self.times_shift_s.max()
+        _require_uniform_spacing(self.times_shift_s, self.time_interp)
+        self._n_distinct = _periodic_distinct_count(self._frame_vel, len(self._mesh_keys))
 
         # Store the per-timestep velocity arrays at the working precision so the
         # sampler reads them without a per-call cast (the field dominates the
@@ -98,29 +181,13 @@ class SingleVTUFlow:
     def _get_mesh_key(self, index):
         return self._mesh_keys[index]
 
+    def _frame_vel(self, index):
+        return self.mesh.point_data[self._mesh_keys[index]]
+
     def set_active_time(self, time):
-        time_wrapped = time % self.tmax
-
-        ind_next = np.argmax((self.times_shift_s - time_wrapped) > 0)
-        ind_prev = ind_next - 1
-        # Plain python float so the in-time blend below stays at the field's
-        # precision (a numpy float64 scalar would upcast an f32 field to f64).
-        weight_next = float((time_wrapped - self.times_shift_s[ind_prev]) / (self.times_shift_s[ind_next] - self.times_shift_s[ind_prev]))
-
-        tol = 0.001 # Tolerance of 0.1% of dt
-
-        if weight_next < tol:
-            key = self._get_mesh_key(ind_prev)
-            self.active_mesh[self.active_key] = self.mesh[key]
-        elif weight_next > 1 - tol:
-            key = self._get_mesh_key(ind_next)
-            self.active_mesh[self.active_key] = self.mesh[key]
-        else:
-            key_prev = self._get_mesh_key(ind_prev)
-            key_next = self._get_mesh_key(ind_next)
-            v_prev = self.mesh[key_prev]
-            v_next = self.mesh[key_next]
-            self.active_mesh[self.active_key] = (1 - weight_next)*v_prev + weight_next*v_next
+        self.active_mesh.point_data[self.active_key] = _interp_time(
+            self.times_shift_s, self.tmax, self._n_distinct, self._frame_vel,
+            time, self.time_interp)
 
     def get_mesh(self, time):
         self.set_active_time(time)
@@ -142,11 +209,12 @@ class PVDFlow:
     """Time-resolved ``.pvd`` flow that stores one full mesh per timestep."""
 
     def __init__(self, filepath, dt=None, active_key="velocity", pbar=True,
-                 subsamp=1, precision="f64"):
+                 subsamp=1, precision="f64", time_interp="linear"):
         if subsamp < 1:
             raise ValueError("subsamp must be >= 1")
 
         self.dtype = resolve_float_dtype(precision)
+        self.time_interp = resolve_time_interp(time_interp)
         self.reader = pv.get_reader(filepath)
         self.times = np.array(self.reader.time_values)
         if subsamp > 1:
@@ -175,7 +243,9 @@ class PVDFlow:
         if dt is not None:
             self.times_shift_s = self.times_shift_s * dt
         self.tmax = self.times_shift_s.max()
-        
+        _require_uniform_spacing(self.times_shift_s, self.time_interp)
+        self._n_distinct = _periodic_distinct_count(self._frame_vel, len(self.meshes))
+
         self.active_mesh = deepcopy(self.meshes[0])
         self.active_mesh[self.active_key] = self.active_mesh[self.active_key]*0.
 
@@ -187,27 +257,13 @@ class PVDFlow:
         # Fast tet sampler (locator built once, reused across all calls)
         self._sampler = _TetSampler(self.active_mesh, dtype=self.dtype)
 
+    def _frame_vel(self, index):
+        return self.meshes[index].point_data[self.active_key]
+
     def set_active_time(self, time):
-
-        time_wrapped = time % self.tmax
-
-        # Get indices
-
-        ind_next = np.argmax((self.times_shift_s - time_wrapped) > 0)
-        ind_prev = ind_next - 1
-        # Plain python float so the blend stays at the field's precision.
-        weight_next = float((time_wrapped - self.times_shift_s[ind_prev]) / (self.times_shift_s[ind_next] - self.times_shift_s[ind_prev]))
-
-        tol = 0.001
-
-        if weight_next < tol:
-            self.active_mesh[self.active_key] = self.meshes[ind_prev][self.active_key]
-        elif weight_next > 1 - tol:
-            self.active_mesh[self.active_key] = self.meshes[ind_next][self.active_key]
-        else:
-            v_prev = self.meshes[ind_prev][self.active_key]
-            v_next = self.meshes[ind_next][self.active_key]
-            self.active_mesh[self.active_key] = (1 - weight_next)*v_prev + weight_next*v_next
+        self.active_mesh.point_data[self.active_key] = _interp_time(
+            self.times_shift_s, self.tmax, self._n_distinct, self._frame_vel,
+            time, self.time_interp)
 
     def get_mesh(self, time):
         self.set_active_time(time)
@@ -255,10 +311,11 @@ class StaticPVDFlow:
     """
 
     def __init__(self, filepath, dt=None, active_key="velocity", pbar=True,
-                 subsamp=1, precision="f64"):
+                 subsamp=1, precision="f64", time_interp="linear"):
         if subsamp < 1:
             raise ValueError("subsamp must be >= 1")
         self.dtype = resolve_float_dtype(precision)
+        self.time_interp = resolve_time_interp(time_interp)
         entries = _parse_pvd(filepath)
         self.times = np.array([e[0] for e in entries])
         files = [e[1] for e in entries]
@@ -285,6 +342,8 @@ class StaticPVDFlow:
         if dt is not None:
             self.times_shift_s = self.times_shift_s * dt
         self.tmax = self.times_shift_s.max()
+        _require_uniform_spacing(self.times_shift_s, self.time_interp)
+        self._n_distinct = _periodic_distinct_count(self._frame_vel, len(self.fields))
 
         self.active_mesh = geom
         self.active_mesh.point_data[self.active_key] = self.fields[0].copy()
@@ -296,22 +355,13 @@ class StaticPVDFlow:
         # Fast tet sampler (locator built once, reused across all calls)
         self._sampler = _TetSampler(self.active_mesh, dtype=self.dtype)
 
+    def _frame_vel(self, index):
+        return self.fields[index]
+
     def set_active_time(self, time):
-        time_wrapped = time % self.tmax
-
-        ind_next = np.argmax((self.times_shift_s - time_wrapped) > 0)
-        ind_prev = ind_next - 1
-        # Plain python float so the blend stays at the field's precision.
-        weight_next = float((time_wrapped - self.times_shift_s[ind_prev]) / (self.times_shift_s[ind_next] - self.times_shift_s[ind_prev]))
-
-        tol = 0.001
-
-        if weight_next < tol:
-            self.active_mesh.point_data[self.active_key] = self.fields[ind_prev]
-        elif weight_next > 1 - tol:
-            self.active_mesh.point_data[self.active_key] = self.fields[ind_next]
-        else:
-            self.active_mesh.point_data[self.active_key] = (1 - weight_next)*self.fields[ind_prev] + weight_next*self.fields[ind_next]
+        self.active_mesh.point_data[self.active_key] = _interp_time(
+            self.times_shift_s, self.tmax, self._n_distinct, self._frame_vel,
+            time, self.time_interp)
 
     def get_mesh(self, time):
         self.set_active_time(time)
@@ -334,7 +384,7 @@ class StaticPVDFlow:
 
 
 def load_flow(path, active_key="velocity", subsamp=1, only_active_key=True,
-              pbar=False, dt=None, precision="f64"):
+              pbar=False, dt=None, precision="f64", time_interp="linear"):
     """Load a time-resolved flow field, picking the right reader for the file type.
 
     ``.vtu`` inputs are interpreted as one static mesh with one velocity array
@@ -355,6 +405,11 @@ def load_flow(path, active_key="velocity", subsamp=1, only_active_key=True,
             ``"f64"`` (default, double) or ``"f32"`` (single -- roughly halves
             the field's memory bandwidth for a speedup, at a looser geometric
             tolerance and reduced trajectory accuracy).
+        time_interp (str): Temporal interpolation between stored frames,
+            ``"linear"`` (default) or ``"cubic"`` (uniform Catmull-Rom over four
+            frames -- 2nd-order-consistent with the solver's time integration,
+            removing the per-frame velocity kink; requires uniform frame
+            spacing).
 
     Returns:
         (Union[SingleVTUFlow, StaticPVDFlow]): A flow object compatible with
@@ -363,8 +418,10 @@ def load_flow(path, active_key="velocity", subsamp=1, only_active_key=True,
     ext = str(path).rsplit(".", 1)[-1].lower()
     if ext == "vtu":
         return SingleVTUFlow(path, active_key=active_key, pbar=pbar,
-                             only_active_key=only_active_key, precision=precision)
+                             only_active_key=only_active_key, precision=precision,
+                             time_interp=time_interp)
     if ext == "pvd":
         return StaticPVDFlow(path, active_key=active_key, pbar=pbar,
-                             subsamp=subsamp, dt=dt, precision=precision)
+                             subsamp=subsamp, dt=dt, precision=precision,
+                             time_interp=time_interp)
     raise ValueError(f"unsupported flow file type: .{ext} (expected .vtu or .pvd)")

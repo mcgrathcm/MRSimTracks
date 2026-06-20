@@ -9,6 +9,11 @@ This project uses semantic versioning while the public API stabilizes.
 - Add a `precision` option (`"f64"` default, `"f32"` single) to `load_flow` and
   `track_parallel` that runs the field sampling and advection in single
   precision for a speedup, carrying positions/output at the same precision.
+- Add a `time_interp` option (`"linear"` default, `"cubic"`) to `load_flow` and
+  `track_parallel`. Cubic uses a uniform Catmull-Rom spline over four frames to
+  interpolate the velocity field between stored timesteps, removing the
+  per-frame velocity kink and reducing temporal reconstruction error (~38% on
+  the example cardiac waveform). Requires uniformly spaced frames.
 
 ## [0.1.0rc1] - 2026-06-18
 
