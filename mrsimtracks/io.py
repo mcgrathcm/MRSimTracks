@@ -10,7 +10,12 @@ import pyvista as pv
 from tqdm.auto import tqdm
 from vtkmodules.vtkCommonDataModel import vtkStaticCellLocator
 
-from .sampler import _TetSampler, _sample_v_fallback, resolve_float_dtype
+from .sampler import (
+    _TetSampler,
+    _condition_mesh,
+    _sample_v_fallback,
+    resolve_float_dtype,
+)
 
 
 def _read_vtu(filepath, active_key, pbar):
@@ -123,7 +128,8 @@ class SingleVTUFlow:
     """
 
     def __init__(self, filepath, active_key="velocity", pbar=False,
-                 only_active_key=False, precision="f64", time_interp="linear"):
+                 only_active_key=False, precision="f64", time_interp="linear",
+                 conform_mesh=True):
         self.filepath = filepath
         self.dtype = resolve_float_dtype(precision)
         self.time_interp = resolve_time_interp(time_interp)
@@ -131,6 +137,11 @@ class SingleVTUFlow:
             self.mesh = _read_vtu(filepath, active_key, pbar)
         else:
             self.mesh = pv.read(filepath, progress_bar=pbar)
+
+        # Condition the mesh to clean all-tet (split wedges, drop degenerate
+        # cells) so the fast sampler can run; no-op when already clean all-tet.
+        if conform_mesh:
+            self.mesh = _condition_mesh(self.mesh)
 
         # Extract all time steps from the point data keys
         self.active_key = active_key
@@ -209,7 +220,8 @@ class PVDFlow:
     """Time-resolved ``.pvd`` flow that stores one full mesh per timestep."""
 
     def __init__(self, filepath, dt=None, active_key="velocity", pbar=True,
-                 subsamp=1, precision="f64", time_interp="linear"):
+                 subsamp=1, precision="f64", time_interp="linear",
+                 conform_mesh=True):
         if subsamp < 1:
             raise ValueError("subsamp must be >= 1")
 
@@ -248,6 +260,9 @@ class PVDFlow:
 
         self.active_mesh = deepcopy(self.meshes[0])
         self.active_mesh[self.active_key] = self.active_mesh[self.active_key]*0.
+        # Clean geometry for the sampler; per-frame fields stay node-aligned.
+        if conform_mesh:
+            self.active_mesh = _condition_mesh(self.active_mesh)
 
         # Build cell locator for only first mesh - assumes static mesh
         self.locator = vtkStaticCellLocator()
@@ -311,7 +326,8 @@ class StaticPVDFlow:
     """
 
     def __init__(self, filepath, dt=None, active_key="velocity", pbar=True,
-                 subsamp=1, precision="f64", time_interp="linear"):
+                 subsamp=1, precision="f64", time_interp="linear",
+                 conform_mesh=True):
         if subsamp < 1:
             raise ValueError("subsamp must be >= 1")
         self.dtype = resolve_float_dtype(precision)
@@ -345,6 +361,10 @@ class StaticPVDFlow:
         _require_uniform_spacing(self.times_shift_s, self.time_interp)
         self._n_distinct = _periodic_distinct_count(self._frame_vel, len(self.fields))
 
+        # Clean geometry for the sampler; per-frame fields stay node-aligned
+        # (conditioning preserves all points).
+        if conform_mesh:
+            geom = _condition_mesh(geom)
         self.active_mesh = geom
         self.active_mesh.point_data[self.active_key] = self.fields[0].copy()
 
@@ -384,7 +404,8 @@ class StaticPVDFlow:
 
 
 def load_flow(path, active_key="velocity", subsamp=1, only_active_key=True,
-              pbar=False, dt=None, precision="f64", time_interp="linear"):
+              pbar=False, dt=None, precision="f64", time_interp="linear",
+              conform_mesh=True):
     """Load a time-resolved flow field, picking the right reader for the file type.
 
     ``.vtu`` inputs are interpreted as one static mesh with one velocity array
@@ -410,6 +431,11 @@ def load_flow(path, active_key="velocity", subsamp=1, only_active_key=True,
             frames -- 2nd-order-consistent with the solver's time integration,
             removing the per-frame velocity kink; requires uniform frame
             spacing).
+        conform_mesh (bool): When ``True`` (default), condition the mesh to clean
+            all-tetrahedral at load -- split non-tet cells (e.g. boundary-layer
+            wedges) into tets and drop degenerate (near-zero-volume) cells -- so
+            the fast sampler can run. A no-op for already-clean all-tet meshes.
+            Set ``False`` to load the mesh as-is (for debugging).
 
     Returns:
         (Union[SingleVTUFlow, StaticPVDFlow]): A flow object compatible with
@@ -419,9 +445,9 @@ def load_flow(path, active_key="velocity", subsamp=1, only_active_key=True,
     if ext == "vtu":
         return SingleVTUFlow(path, active_key=active_key, pbar=pbar,
                              only_active_key=only_active_key, precision=precision,
-                             time_interp=time_interp)
+                             time_interp=time_interp, conform_mesh=conform_mesh)
     if ext == "pvd":
         return StaticPVDFlow(path, active_key=active_key, pbar=pbar,
                              subsamp=subsamp, dt=dt, precision=precision,
-                             time_interp=time_interp)
+                             time_interp=time_interp, conform_mesh=conform_mesh)
     raise ValueError(f"unsupported flow file type: .{ext} (expected .vtu or .pvd)")
