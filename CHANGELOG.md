@@ -41,7 +41,7 @@ This project uses semantic versioning while the public API stabilizes.
 - Add a reduced real-data fixture for fast CI.
 - Add initial publication metadata and MIT license.
 
-## [0.1.0] - 2026-06-17
+## [0.1.0rc0] - 2026-06-17
 
 - Initial packaged version of MRSimTracks.
 - Add high-level APIs for loading flow fields, tracking particles, parallel
