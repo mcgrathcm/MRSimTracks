@@ -15,6 +15,7 @@ from .core import TrackingResult, track
 from .io import load_flow
 from .parallel import track_parallel
 from .reseeding import BoundaryReseeder
+from .wall_slip import WallSlip
 
 __all__ = [
     "load_flow",
@@ -22,4 +23,5 @@ __all__ = [
     "track_parallel",
     "TrackingResult",
     "BoundaryReseeder",
+    "WallSlip",
 ]

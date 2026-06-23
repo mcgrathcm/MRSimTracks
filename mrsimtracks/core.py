@@ -188,7 +188,7 @@ def _normalize_method(method):
 
 def _track_particles(flow_mesh, initial_seeds: pv.PolyData, reset_points: np.ndarray,
                      dt, tmax, method="RK4", pbar=True, metrics=None,
-                     reseeder=None, rng=None, step_writer=None):
+                     reseeder=None, rng=None, step_writer=None, wall_slip=None):
     # `metrics` is filled in place with a wall-time breakdown when provided.
     # reseeder: optional object with reseed(n, t) -> (n, 3); when given, OOB
     # particles are recycled to currently-inflow boundary faces (handles
@@ -273,6 +273,11 @@ def _track_particles(flow_mesh, initial_seeds: pv.PolyData, reset_points: np.nda
         else:
             v = k1
 
+        # Near-wall no-penetration: strip the into-wall velocity so particles
+        # slide along walls instead of being deposited and trapped at v~0.
+        if wall_slip is not None:
+            v = wall_slip.apply(r, v)
+
         # Advect
         r = r + v*dt
 
@@ -319,7 +324,7 @@ def _track_particles(flow_mesh, initial_seeds: pv.PolyData, reset_points: np.nda
 
 def track(flow, seeds=None, dt=1e-3, tmax=None, reseeder=None, inlet=None,
           method="RK4", pbar=True, rng=None, output_path=None,
-          return_metrics=False):
+          return_metrics=False, wall_slip=None):
     """Track particles through a loaded flow field.
 
     Args:
@@ -343,6 +348,10 @@ def track(flow, seeds=None, dt=1e-3, tmax=None, reseeder=None, inlet=None,
             returned result is file-backed until arrays are accessed.
         return_metrics (bool): When ``True``, return ``(result, metrics)`` with
             loop timing metrics.
+        wall_slip (WallSlip | None): Optional near-wall no-penetration projection
+            (see :class:`mrsimtracks.WallSlip`) that strips the into-wall
+            velocity component near walls so particles slide instead of being
+            deposited and trapped.
 
     Returns:
         (Union[TrackingResult, tuple]): ``TrackingResult`` by
@@ -373,7 +382,8 @@ def track(flow, seeds=None, dt=1e-3, tmax=None, reseeder=None, inlet=None,
                 dtype=np.dtype(getattr(flow, "dtype", np.float64)))
         pos, reset = _track_particles(
             flow, seeds, inlet_arr, dt, tmax, method=method, pbar=pbar,
-            metrics=metrics, reseeder=reseeder, rng=rng, step_writer=writer)
+            metrics=metrics, reseeder=reseeder, rng=rng, step_writer=writer,
+            wall_slip=wall_slip)
     finally:
         if writer is not None:
             writer.close()

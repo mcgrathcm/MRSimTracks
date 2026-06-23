@@ -9,7 +9,8 @@ def _track_particle_batch(path, seeds, inlet, dt, tmax, method="RK4",
                           active_key="velocity", pbar=False, dt_pvd=None,
                           only_active_key=True, caps=None, static_pvd=True,
                           subsamp=1, rng_seed=None, collect_metrics=False,
-                          precision="f64", time_interp="linear", conform_mesh=True):
+                          precision="f64", time_interp="linear", conform_mesh=True,
+                          wall_slip=False, wall_slip_band=0.02):
     # Tracking only ever reads active_key, so skip pressure (etc.) by default to
     # speed up the per-worker reload and cut memory.
     ext = str(path).rsplit(".", 1)[-1].lower()
@@ -36,11 +37,17 @@ def _track_particle_batch(path, seeds, inlet, dt, tmax, method="RK4",
         # dt enables the volumetric inflow layer (avoids density striping).
         reseeder = BoundaryReseeder(caps, flow, dt=dt)
 
+    # Near-wall slip projection, also built per worker from this worker's flow.
+    slip = None
+    if wall_slip:
+        from .wall_slip import WallSlip
+        slip = WallSlip(flow, caps=caps, band_frac=wall_slip_band)
+
     rng = None if rng_seed is None else np.random.default_rng(rng_seed)
     metrics = {} if collect_metrics else None
     positions, reset_flags = _track_particles(
         flow, pv.PolyData(seeds), inlet, dt, tmax, method=method, pbar=pbar,
-        reseeder=reseeder, rng=rng, metrics=metrics)
+        reseeder=reseeder, rng=rng, metrics=metrics, wall_slip=slip)
 
     return positions, reset_flags, metrics
 
@@ -57,7 +64,7 @@ def track_parallel(path, seeds, dt=1e-3, tmax=None, caps=None, inlet=None,
                    n_workers=3, active_key="velocity", method="RK4", subsamp=1,
                    only_active_key=True, pbar=True, rng=None,
                    return_metrics=False, precision="f64", time_interp="linear",
-                   conform_mesh=True):
+                   conform_mesh=True, wall_slip=False, wall_slip_band=0.02):
     """Track particles in parallel, with each worker reloading the flow field.
 
     Args:
@@ -86,6 +93,10 @@ def track_parallel(path, seeds, dt=1e-3, tmax=None, caps=None, inlet=None,
             (default) or ``"cubic"`` (Catmull-Rom; requires uniform spacing).
         conform_mesh (bool): Condition the mesh to clean all-tet at load (split
             non-tet cells, drop degenerate cells). Default ``True``.
+        wall_slip (bool): Apply the near-wall no-penetration projection (built per
+            worker from ``caps``). Default ``False``.
+        wall_slip_band (float): Slip band as a fraction of vessel diameter when
+            ``wall_slip`` is enabled. Default ``0.02``.
 
     Returns:
         (Union[TrackingResult, tuple]): ``TrackingResult`` by
@@ -121,7 +132,8 @@ def track_parallel(path, seeds, dt=1e-3, tmax=None, caps=None, inlet=None,
             only_active_key=only_active_key, caps=caps, subsamp=subsamp,
             pbar=(pbar and i == 0), rng_seed=int(rng_seeds[i]),
             collect_metrics=return_metrics, precision=precision,
-            time_interp=time_interp, conform_mesh=conform_mesh)
+            time_interp=time_interp, conform_mesh=conform_mesh,
+            wall_slip=wall_slip, wall_slip_band=wall_slip_band)
         for i, batch in enumerate(batches)
     )
 
