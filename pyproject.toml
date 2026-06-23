@@ -6,9 +6,7 @@ build-backend = "hatchling.build"
 exclude = [
     "/example/*.vtu",
     "/example/*.vtp",
-    "/tests/data/*.vtu",
-    "/tests/data/*.vtp",
-    "/tests/data/*.h5",
+    "/tests/**",
 ]
 
 [tool.hatch.build.targets.wheel]
