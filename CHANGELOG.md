@@ -14,6 +14,12 @@ This project uses semantic versioning while the public API stabilizes.
   interpolate the velocity field between stored timesteps, removing the
   per-frame velocity kink and reducing temporal reconstruction error (~38% on
   the example cardiac waveform). Requires uniformly spaced frames.
+- Add load-time mesh conditioning (`conform_mesh`, default `True`): split
+  non-tetrahedral cells (e.g. boundary-layer wedges/prisms) into tets and drop
+  degenerate (near-zero-volume) cells so the fast tet sampler can run on hybrid
+  or imperfect meshes. A no-op for already-clean all-tet meshes; pass
+  `conform_mesh=False` to load as-is. `_TetSampler` now also guards against
+  degenerate cells defensively (no crash; reports the count).
 
 ## [0.1.0rc1] - 2026-06-18
 

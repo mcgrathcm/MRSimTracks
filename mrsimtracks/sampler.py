@@ -132,6 +132,66 @@ if _HAVE_NUMBA:
                 out_status[p] = 1 if boundary else 2
 
 
+def _tet_volumes(node_xyz, conn):
+    """Per-cell volume of tets given (n,3) node coords and (nc,4) connectivity.
+
+    Uses the scalar triple product directly -- far faster than ``np.linalg.det``
+    over a million 3x3 matrices (no per-matrix LAPACK overhead).
+    """
+    p = node_xyz[conn]
+    e0, e1, e2 = p[:, 0] - p[:, 3], p[:, 1] - p[:, 3], p[:, 2] - p[:, 3]
+    return np.abs(np.einsum("ci,ci->c", e0, np.cross(e1, e2))) / 6.0
+
+
+# A tet is "degenerate" when its volume is this far below the median cell volume
+# -- effectively zero (coplanar/duplicate nodes). Such cells hold no interior, so
+# no particle is ever inside one; they only break the affine precompute.
+_DEGENERATE_VOL_FRAC = 1e-8
+
+
+def _condition_mesh(mesh, verbose=True):
+    """Return a clean all-tetrahedral mesh, or the input unchanged if already so.
+
+    Splits any non-tet cells (e.g. boundary-layer wedges/prisms) into tets and
+    drops near-zero-volume slivers that would otherwise make the per-cell affine
+    map singular. Points and point-data are preserved (so node-indexed velocity
+    fields stay aligned), and an already-clean all-tet mesh is returned untouched.
+    """
+    celltypes = np.asarray(mesh.celltypes)
+    n_nontet = int(np.count_nonzero(celltypes != VTK_TETRA))
+    work = mesh.triangulate() if n_nontet else mesh   # wedges/prisms -> tets
+
+    conn = work.cells.reshape(-1, 5)[:, 1:]           # all-tet after triangulate
+    node = np.asarray(work.points, dtype=np.float64)
+    vol = _tet_volumes(node, conn)
+    pos = vol[vol > 0]
+    med = np.median(pos) if pos.size else 1.0
+    good = vol > _DEGENERATE_VOL_FRAC * med
+    n_degen = int(good.size - np.count_nonzero(good))
+
+    if n_nontet == 0 and n_degen == 0:
+        return mesh                                   # already clean -> no-op
+
+    kept = conn[good]
+    cells = np.empty((kept.shape[0], 5), dtype=np.int64)
+    cells[:, 0] = 4
+    cells[:, 1:] = kept
+    out = pv.UnstructuredGrid(cells.ravel(),
+                              np.full(kept.shape[0], VTK_TETRA, np.uint8),
+                              np.asarray(work.points))
+    out.point_data.update(work.point_data)            # node-aligned arrays preserved
+
+    if verbose:
+        parts = []
+        if n_nontet:
+            parts.append(f"split {n_nontet} non-tetrahedral cell(s) into tets")
+        if n_degen:
+            parts.append(f"dropped {n_degen} degenerate (near-zero-volume) cell(s)")
+        print(f"[mrsimtracks] mesh conditioning: {'; '.join(parts)} "
+              f"({mesh.n_cells} -> {out.n_cells} cells)")
+    return out
+
+
 class _TetSampler:
     """Fast velocity sampler for a static all-tetrahedral mesh.
 
@@ -179,12 +239,43 @@ class _TetSampler:
         T = np.stack([vx[:, 0] - d, vx[:, 1] - d,
                       vx[:, 2] - d], axis=2)                 # (nc, 3, 3)
         self._d = np.ascontiguousarray(d, dtype=self.dtype)
-        self._Minv = np.ascontiguousarray(np.linalg.inv(T), dtype=self.dtype)
+
+        # Defensive guard: a degenerate (near-zero-volume) tet has a singular T,
+        # which crashes a batched np.linalg.inv. Such a cell holds no interior, so
+        # no point is ever inside it. Try the inverse directly (free on a clean
+        # mesh -- the usual case after load-time conditioning); only on failure
+        # locate the degenerate cells, invert a placeholder for them, and mark
+        # their affine map NaN so the walk never accepts them (NaN comparisons are
+        # False), routing any query there to the probe.
+        nc = self.conn.shape[0]
+        try:
+            Minv = np.linalg.inv(T)
+            self._degenerate = np.zeros(nc, dtype=bool)
+        except np.linalg.LinAlgError:
+            vol = _tet_volumes(self.node_xyz, self.conn)
+            pos = vol[vol > 0]
+            med = np.median(pos) if pos.size else 1.0
+            self._degenerate = vol <= _DEGENERATE_VOL_FRAC * med
+            n_degen = int(np.count_nonzero(self._degenerate))
+            print(f"[mrsimtracks] _TetSampler: caught {n_degen} degenerate "
+                  f"(near-zero-volume) cell(s); excluded from the fast walk "
+                  f"(resolved via the locator probe). Consider mesh conditioning.")
+            T = T.copy()
+            T[self._degenerate] = np.eye(3)                 # avoid singular inverse
+            Minv = np.linalg.inv(T)
+            Minv[self._degenerate] = np.nan                 # never accepted by the walk
+        self._Minv = np.ascontiguousarray(Minv, dtype=self.dtype)
 
         # Tet face adjacency: adj[c, i] is the cell sharing the face opposite
         # local vertex i of cell c (-1 on a domain boundary). Built by matching
         # faces (sorted node triples) that appear in exactly two cells.
         self._adj = self._build_adjacency(self.conn, self.node_xyz.shape[0])
+        if self._degenerate.any():
+            # Treat a step into a degenerate cell as a domain boundary so the
+            # walk falls back to the probe instead of reading a NaN affine map.
+            nbr = self._adj
+            into_degen = (nbr >= 0) & self._degenerate[np.where(nbr >= 0, nbr, 0)]
+            nbr[into_degen] = -1
         # Contiguous int64 connectivity for the numba kernel.
         self._conn64 = np.ascontiguousarray(self.conn, dtype=np.int64)
 
@@ -238,6 +329,12 @@ class _TetSampler:
         out = pv.wrap(self._probe.GetOutput())
         cid = np.asarray(out.point_data["cid"])
         valid = np.asarray(out.point_data["vtkValidPointMask"]).astype(bool)
+        if self._degenerate.any():
+            # A point landing exactly on a zero-volume sliver must not resolve to
+            # it (its affine map is NaN); treat as outside the domain.
+            nc = self.conn.shape[0]
+            safe = np.where((cid >= 0) & (cid < nc), cid, 0)
+            valid &= ~self._degenerate[safe]
         return cid, valid
 
     def locate(self, points_xyz, guess=None, tol=None, max_iter=20):

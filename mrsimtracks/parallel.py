@@ -9,7 +9,7 @@ def _track_particle_batch(path, seeds, inlet, dt, tmax, method="RK4",
                           active_key="velocity", pbar=False, dt_pvd=None,
                           only_active_key=True, caps=None, static_pvd=True,
                           subsamp=1, rng_seed=None, collect_metrics=False,
-                          precision="f64", time_interp="linear"):
+                          precision="f64", time_interp="linear", conform_mesh=True):
     # Tracking only ever reads active_key, so skip pressure (etc.) by default to
     # speed up the per-worker reload and cut memory.
     ext = str(path).rsplit(".", 1)[-1].lower()
@@ -17,13 +17,14 @@ def _track_particle_batch(path, seeds, inlet, dt, tmax, method="RK4",
         flow = SingleVTUFlow(
             path, active_key=active_key, pbar=pbar,
             only_active_key=only_active_key, precision=precision,
-            time_interp=time_interp)
+            time_interp=time_interp, conform_mesh=conform_mesh)
     elif ext == "pvd":
         # static_pvd: store one geometry + per-frame fields (memory-efficient).
         # Set False to fall back to the full-mesh-per-frame PVDFlow.
         cls = StaticPVDFlow if static_pvd else PVDFlow
         flow = cls(path, active_key=active_key, pbar=pbar, dt=dt_pvd,
-                   subsamp=subsamp, precision=precision, time_interp=time_interp)
+                   subsamp=subsamp, precision=precision, time_interp=time_interp,
+                   conform_mesh=conform_mesh)
     else:
         raise ValueError(f"unsupported flow file type: .{ext} (expected .vtu or .pvd)")
 
@@ -55,7 +56,8 @@ def batched_particles(particles, batch_size, rng=None):
 def track_parallel(path, seeds, dt=1e-3, tmax=None, caps=None, inlet=None,
                    n_workers=3, active_key="velocity", method="RK4", subsamp=1,
                    only_active_key=True, pbar=True, rng=None,
-                   return_metrics=False, precision="f64", time_interp="linear"):
+                   return_metrics=False, precision="f64", time_interp="linear",
+                   conform_mesh=True):
     """Track particles in parallel, with each worker reloading the flow field.
 
     Args:
@@ -82,6 +84,8 @@ def track_parallel(path, seeds, dt=1e-3, tmax=None, caps=None, inlet=None,
             ``"f64"`` (default) or ``"f32"`` (single, faster but less accurate).
         time_interp (str): Temporal interpolation between frames, ``"linear"``
             (default) or ``"cubic"`` (Catmull-Rom; requires uniform spacing).
+        conform_mesh (bool): Condition the mesh to clean all-tet at load (split
+            non-tet cells, drop degenerate cells). Default ``True``.
 
     Returns:
         (Union[TrackingResult, tuple]): ``TrackingResult`` by
@@ -117,7 +121,7 @@ def track_parallel(path, seeds, dt=1e-3, tmax=None, caps=None, inlet=None,
             only_active_key=only_active_key, caps=caps, subsamp=subsamp,
             pbar=(pbar and i == 0), rng_seed=int(rng_seeds[i]),
             collect_metrics=return_metrics, precision=precision,
-            time_interp=time_interp)
+            time_interp=time_interp, conform_mesh=conform_mesh)
         for i, batch in enumerate(batches)
     )
 
