@@ -72,6 +72,22 @@ def test_small_fixture_streams_tracks_and_returns_metrics(tmp_path):
         assert f["reset"].shape == (2, 10)
         assert f.attrs["dt"] == pytest.approx(0.002)
         assert np.isfinite(f["position"][...]).all()
+        expected_position = f["position"][::2]
+        expected_reset = f["reset"][::2]
+        position_dtype = f["position"].dtype
+        reset_dtype = f["reset"].dtype
+
+    copy_path = tmp_path / "streamed-tracks-copy.h5"
+    result.save(copy_path, time_subsample=2)
+
+    with h5py.File(copy_path, "r") as f:
+        assert f["position"].shape == (1, 10, 3)
+        assert f["reset"].shape == (1, 10)
+        assert f["position"].dtype == position_dtype
+        assert f["reset"].dtype == reset_dtype
+        assert f.attrs["dt"] == pytest.approx(0.004)
+        np.testing.assert_allclose(f["position"][...], expected_position)
+        np.testing.assert_array_equal(f["reset"][...], expected_reset)
 
 
 def test_boundary_reseeder_flux_waveform_is_finite_and_balanced():
