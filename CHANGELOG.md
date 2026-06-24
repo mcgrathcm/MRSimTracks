@@ -20,6 +20,12 @@ This project uses semantic versioning while the public API stabilizes.
   or imperfect meshes. A no-op for already-clean all-tet meshes; pass
   `conform_mesh=False` to load as-is. `_TetSampler` now also guards against
   degenerate cells defensively (no crash; reports the count).
+- Add `WallSlip`, an optional near-wall no-penetration projection passed to
+  `track`/`track_parallel` (`wall_slip=`). It strips the into-wall velocity
+  component within a band of the wall (a fraction of the vessel hydraulic
+  diameter, default 2%) so particles slide along walls instead of being
+  deposited and trapped by the spurious near-wall divergence of the
+  interpolated field. Open boundaries (caps) are excluded so flux still passes.
 
 ## [0.1.0rc1] - 2026-06-18
 
