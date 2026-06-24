@@ -8,6 +8,7 @@ from mrsimtracks.seeding import seed_mesh
 
 flow = mt.load_flow("case.pvd", active_key="Velocity")
 reseeder = mt.BoundaryReseeder(["Inlet.vtp", "Outlet.vtp"], flow, dt=0.002)
+wall_slip = mt.WallSlip(flow, caps=["Inlet.vtp", "Outlet.vtp"])
 seeds = seed_mesh(flow.active_mesh, 200_000, rng=np.random.default_rng(0))
 
 result = mt.track(
@@ -15,6 +16,7 @@ result = mt.track(
     seeds=seeds,
     dt=0.002,
     reseeder=reseeder,
+    wall_slip=wall_slip,
 )
 
 result.save("tracks.h5")
@@ -61,3 +63,35 @@ result = mt.track_parallel(
 ```
 
 Each worker reloads the field, so memory use scales with `n_workers`.
+
+## Wall Slip
+
+Use `WallSlip` when interpolation near no-slip walls deposits particles into a
+thin stuck layer. It removes only the into-wall velocity component for particles
+inside a narrow wall band and leaves tangential motion unchanged:
+
+```python
+wall_slip = mt.WallSlip(flow, caps=["Inlet.vtp", "Outlet.vtp"], band_frac=0.02)
+result = mt.track(
+    flow,
+    seeds=seeds,
+    dt=0.002,
+    reseeder=reseeder,
+    wall_slip=wall_slip,
+)
+```
+
+Pass the cap surfaces so inlet/outlet faces are not treated as walls. For
+parallel tracking, set `wall_slip=True` and optionally `wall_slip_band=0.02`:
+
+```python
+result = mt.track_parallel(
+    "case.pvd",
+    seeds=seeds,
+    dt=0.002,
+    caps=["Inlet.vtp", "Outlet.vtp"],
+    active_key="Velocity",
+    n_workers=3,
+    wall_slip=True,
+)
+```

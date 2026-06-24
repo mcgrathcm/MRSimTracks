@@ -6,6 +6,8 @@ This project uses semantic versioning while the public API stabilizes.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-06-24
+
 - Add a `precision` option (`"f64"` default, `"f32"` single) to `load_flow` and
   `track_parallel` that runs the field sampling and advection in single
   precision for a speedup, carrying positions/output at the same precision.
