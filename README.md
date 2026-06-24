@@ -16,16 +16,16 @@ boundaries with optional **backflow-aware** reseeding.
 
 ## Install
 
-MRSimTracks is currently published on PyPI as a pre-release:
+MRSimTracks is published on PyPI:
 
 ```bash
-uv add "mrsimtracks==0.1.0rc1"
+uv add "mrsimtracks==0.2.0"
 ```
 
 or with pip:
 
 ```bash
-python -m pip install "mrsimtracks==0.1.0rc1"
+python -m pip install "mrsimtracks==0.2.0"
 ```
 
 To install the latest source from GitHub instead:
@@ -56,11 +56,20 @@ flow = mt.load_flow("case.pvd", active_key="Velocity")
 # 2. (optional) Backflow-aware inflow reseeder from labeled cap surfaces
 reseeder = mt.BoundaryReseeder(["Inlet.vtp", "Outlet.vtp"], flow, dt=0.002)
 
-# 3. Seed and track
-seeds = seed_mesh(flow.active_mesh, 200_000, rng=np.random.default_rng(0))
-result = mt.track(flow, seeds=seeds, dt=0.002, reseeder=reseeder)
+# 3. (optional) Near-wall no-penetration projection
+wall_slip = mt.WallSlip(flow, caps=["Inlet.vtp", "Outlet.vtp"])
 
-# 4. Use / save
+# 4. Seed and track
+seeds = seed_mesh(flow.active_mesh, 200_000, rng=np.random.default_rng(0))
+result = mt.track(
+    flow,
+    seeds=seeds,
+    dt=0.002,
+    reseeder=reseeder,
+    wall_slip=wall_slip,
+)
+
+# 5. Use / save
 result.positions      # (n_steps, n_particles, 3)
 result.reset          # (n_steps, n_particles) reseed flags
 result.times          # (n_steps,)
@@ -96,7 +105,7 @@ Each worker reloads the field, so memory scales with `n_workers`:
 result = mt.track_parallel(
     "case.pvd", seeds=seeds, dt=0.002,
     caps=["Inlet.vtp", "Outlet.vtp"], active_key="Velocity",
-    n_workers=3, subsamp=1,
+    n_workers=3, subsamp=1, wall_slip=True,
 )
 ```
 
@@ -108,6 +117,7 @@ result = mt.track_parallel(
 | `track(flow, seeds=..., dt=..., reseeder=...)` | Single-process tracking → `TrackingResult`. Use `output_path=...` for streamed HDF5 output and `return_metrics=True` for timing metrics. |
 | `track_parallel(path, ..., caps=..., n_workers=...)` | Multi-process tracking → `TrackingResult`. |
 | `BoundaryReseeder(caps, flow, dt=...)` | Flux-weighted, time-resolved inflow reseeder. `caps` = cap surface path(s) or a surface with a `region_id` cell array. |
+| `WallSlip(flow, caps=..., band_frac=0.02)` | Optional near-wall no-penetration projection for `track(..., wall_slip=...)`. Excludes cap faces so inlet/outlet flux remains open. |
 
 ## Reseeding notes
 
@@ -120,3 +130,24 @@ result = mt.track_parallel(
   plane seeding.
 - `flux_waveform()` returns per-cap net flux over the cycle — a conservation /
   validation diagnostic (`Σ caps ≈ 0` for a well-resolved incompressible field).
+
+## Wall-slip notes
+
+`WallSlip` removes only the into-wall velocity component for particles within a
+thin wall band. Use it when interpolated near-wall velocities deposit particles
+against no-slip walls. Pass the same cap surfaces used for reseeding so open
+boundaries are excluded from the wall set:
+
+```python
+wall_slip = mt.WallSlip(flow, caps=["Inlet.vtp", "Outlet.vtp"], band_frac=0.02)
+result = mt.track(
+    flow,
+    seeds=seeds,
+    dt=0.002,
+    reseeder=reseeder,
+    wall_slip=wall_slip,
+)
+```
+
+For `track_parallel`, set `wall_slip=True`; each worker builds its own
+projection from the worker-local flow and `caps`.

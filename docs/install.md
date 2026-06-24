@@ -1,15 +1,15 @@
 # Install
 
-MRSimTracks is currently published on PyPI as a pre-release:
+MRSimTracks is published on PyPI:
 
 ```bash
-uv add "mrsimtracks==0.1.0rc1"
+uv add "mrsimtracks==0.2.0"
 ```
 
 or with pip:
 
 ```bash
-python -m pip install "mrsimtracks==0.1.0rc1"
+python -m pip install "mrsimtracks==0.2.0"
 ```
 
 To install the latest source from GitHub instead:

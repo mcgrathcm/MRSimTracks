@@ -26,6 +26,12 @@
     options:
       show_root_heading: true
 
+## Wall Slip
+
+::: mrsimtracks.wall_slip.WallSlip
+    options:
+      show_root_heading: true
+
 ## Seeding
 
 ::: mrsimtracks.seeding.seed_mesh
