@@ -61,13 +61,12 @@ def seed_region(mesh, npoints, bounds, normalization=None, rng=None):
     points = np.array(np.meshgrid(x, y, z)).T.reshape(-1, 3)
     point_cloud = pv.PolyData(points)
 
-    # Extract surface
-    surf = mesh.extract_surface(algorithm=None)
-
-    # Initial guess of points  inside the surface
-    selected = point_cloud.select_interior_points(surf)
-    selected_key = "selected_points" if "selected_points" in selected.point_data else "SelectedPoints"
-    inside = selected[selected_key]
+    # Probe the volume mesh directly. Surface-based classification depends on
+    # outward-facing normals and inverts the mask when tetrahedra use the
+    # opposite vertex orientation.
+    inside = np.asarray(
+        point_cloud.sample(mesh)["vtkValidPointMask"], dtype=bool
+    )
     # This is like a binary mask of the mesh
     inside_array = inside.reshape(len(z), len(x), len(y))
     # dilate (to account for boundary regions)

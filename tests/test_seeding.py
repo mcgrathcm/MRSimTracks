@@ -4,7 +4,7 @@ import pyvista as pv
 from mrsimtracks.seeding import seed_mesh, seed_region
 
 
-def _unit_tet_mesh():
+def _unit_tet_mesh(reverse=False):
     points = np.array(
         [
             [0.0, 0.0, 0.0],
@@ -13,7 +13,8 @@ def _unit_tet_mesh():
             [0.0, 0.0, 1.0],
         ]
     )
-    cells = np.array([4, 0, 1, 2, 3])
+    vertices = [0, 2, 1, 3] if reverse else [0, 1, 2, 3]
+    cells = np.array([4, *vertices])
     celltypes = np.array([pv.CellType.TETRA])
     mesh = pv.UnstructuredGrid(cells, celltypes, points)
     mesh.point_data["density"] = np.array([0.1, 0.5, 0.75, 1.0])
@@ -39,6 +40,17 @@ def test_seed_mesh_returns_repeatable_points_inside_domain():
     assert 0 < seeds1.shape[0] <= 200
     np.testing.assert_allclose(seeds1, seeds2)
     _assert_inside_unit_tet(mesh, seeds1)
+
+
+def test_seed_mesh_is_independent_of_tetrahedron_orientation():
+    positive = _unit_tet_mesh()
+    negative = _unit_tet_mesh(reverse=True)
+
+    positive_seeds = seed_mesh(positive, 200, rng=np.random.default_rng(1234))
+    negative_seeds = seed_mesh(negative, 200, rng=np.random.default_rng(1234))
+
+    np.testing.assert_allclose(negative_seeds, positive_seeds)
+    _assert_inside_unit_tet(negative, negative_seeds)
 
 
 def test_seed_region_supports_scalar_normalization():
