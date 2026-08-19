@@ -12,6 +12,7 @@ Typical use:
 """
 
 from .core import TrackingResult, track
+from .imaging import VelocityImage, sample_velocity_image
 from .io import load_flow
 from .parallel import track_parallel
 from .reseeding import BoundaryReseeder
@@ -19,9 +20,11 @@ from .wall_slip import WallSlip
 
 __all__ = [
     "load_flow",
+    "sample_velocity_image",
     "track",
     "track_parallel",
     "TrackingResult",
+    "VelocityImage",
     "BoundaryReseeder",
     "WallSlip",
 ]

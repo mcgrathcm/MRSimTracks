@@ -1,12 +1,14 @@
 # MRSimTracks
 
-Generate CFD-derived particle trajectories for MR flow simulation.
+Generate CFD-derived particle trajectories and ground-truth velocity images for
+MR flow simulation.
 
 MRSimTracks performs Lagrangian particle tracking in time-resolved (pulsatile)
-CFD meshes. It operates on mesh velocity fields, not MR image data. It seeds
-particles in a tetrahedral flow domain, advects them through a time-periodic
-velocity field (RK4), and recycles out-of-bounds particles back to the inflow
-boundaries with optional **backflow-aware** reseeding.
+CFD meshes and samples their velocity fields onto Cartesian reference images in
+the mesh coordinate system. It seeds particles in a tetrahedral flow domain,
+advects them through a time-periodic velocity field (RK4), and recycles
+out-of-bounds particles back to the inflow boundaries with optional
+**backflow-aware** reseeding.
 
 <p align="center">
   <img src="docs/assets/ubend_density_slice.webp" alt="Greyscale center-slice particle animation through the U-bend" width="30%">
@@ -114,6 +116,7 @@ result = mt.track_parallel(
 | Function | Purpose |
 |---|---|
 | `load_flow(path, active_key=...)` | Load `.vtu` (one geometry, many time fields) or `.pvd` (series); auto-selects the memory-efficient reader. `subsamp=N` keeps every Nth frame. |
+| `sample_velocity_image(flow, ...)` | Sample a dense native-coordinate `(time,x,y,z,component)` velocity image with exact temporal-window and subvoxel averaging and sparse HDF5 save support. Set `reorder_by_extent=True` for largest-to-smallest axes. |
 | `track(flow, seeds=..., dt=..., reseeder=...)` | Single-process tracking → `TrackingResult`. Use `output_path=...` for streamed HDF5 output and `return_metrics=True` for timing metrics. |
 | `track_parallel(path, ..., caps=..., n_workers=...)` | Multi-process tracking → `TrackingResult`. |
 | `BoundaryReseeder(caps, flow, dt=...)` | Flux-weighted, time-resolved inflow reseeder. `caps` = cap surface path(s) or a surface with a `region_id` cell array. |

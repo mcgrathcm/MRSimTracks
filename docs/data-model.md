@@ -1,6 +1,7 @@
 # Data Model
 
-MRSimTracks expects CFD mesh data, not MR image data.
+MRSimTracks uses CFD mesh data for particle tracking and for sampling
+ground-truth Cartesian velocity images.
 
 ## Flow Mesh
 
@@ -16,6 +17,20 @@ The current fast path assumes:
 - static mesh geometry
 - point-data velocity fields
 - a consistent velocity array name prefix, such as `Velocity`
+
+## Ground-Truth Velocity Images
+
+`sample_velocity_image` uses the same unshifted native `(x,y,z)` coordinates as
+`track`. Velocity components remain `(vx,vy,vz)` and no mesh-dependent axis
+permutation is applied by default. `reorder_by_extent=True` optionally applies a
+stable largest-to-smallest permutation to both image axes and vector components,
+without shifting the coordinate origin.
+
+The dense in-memory velocity array has shape `(time,x,y,z,component)`.
+Spatial occupancy records the fraction of regular subvoxel samples inside the
+CFD domain. Sparse HDF5 output stores only voxels with nonzero occupancy while
+retaining the dense shape, FOV, resolution, times, selected axis permutation,
+and zero origin shift as metadata.
 
 ## Cap Surfaces
 

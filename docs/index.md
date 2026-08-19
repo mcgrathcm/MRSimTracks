@@ -1,9 +1,9 @@
 # MRSimTracks
 
-MRSimTracks generates CFD-derived particle trajectories for MR flow simulation.
+MRSimTracks generates CFD-derived particle trajectories and ground-truth
+velocity images for MR flow simulation.
 
-It operates on time-resolved mesh velocity fields, not MR image data. The core
-workflow is:
+It operates on time-resolved mesh velocity fields. The core tracking workflow is:
 
 1. Load a static tetrahedral flow mesh with time-varying velocity fields.
 2. Seed particles in the flow domain.
@@ -19,6 +19,7 @@ workflow is:
 - Provides flux-weighted, backflow-aware boundary reseeding.
 - Can stream large tracking outputs directly to HDF5.
 - Includes small normal-CI fixtures and full Git LFS release validation.
+- Samples native-coordinate Cartesian velocity images with temporal and spatial averaging.
 
 ## Import Name
 
