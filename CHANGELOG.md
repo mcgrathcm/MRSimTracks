@@ -6,6 +6,12 @@ This project uses semantic versioning while the public API stabilizes.
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-08-18
+
+- Fix mesh seeding for tetrahedra with reversed vertex orientation by probing
+  the volume mesh directly instead of relying on orientation-sensitive surface
+  normals.
+
 ## [0.2.0] - 2026-06-24
 
 - Add a `precision` option (`"f64"` default, `"f32"` single) to `load_flow` and
