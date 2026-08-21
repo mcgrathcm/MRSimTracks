@@ -20,6 +20,16 @@
     options:
       show_root_heading: true
 
+## Velocity Images
+
+::: mrsimtracks.imaging.sample_velocity_image
+    options:
+      show_root_heading: true
+
+::: mrsimtracks.imaging.VelocityImage
+    options:
+      show_root_heading: true
+
 ## Reseeding
 
 ::: mrsimtracks.reseeding.BoundaryReseeder

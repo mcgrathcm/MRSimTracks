@@ -9,9 +9,11 @@ from mrsimtracks.seeding import seed_region
 def test_public_api_exports_expected_names():
     expected = {
         "load_flow",
+        "sample_velocity_image",
         "track",
         "track_parallel",
         "TrackingResult",
+        "VelocityImage",
         "BoundaryReseeder",
     }
 

@@ -6,6 +6,12 @@ This project uses semantic versioning while the public API stabilizes.
 
 ## [Unreleased]
 
+- Add `sample_velocity_image` for Cartesian ground-truth velocity images in the
+  same native `(x,y,z)` coordinates as particle tracking, with exact piecewise-
+  linear temporal averaging, regular subvoxel averaging, occupancy maps, and
+  sparse spatial HDF5 storage. Optional extent-based reordering applies the same
+  largest-to-smallest permutation to image axes and velocity components.
+
 ## [0.2.1] - 2026-08-18
 
 - Fix mesh seeding for tetrahedra with reversed vertex orientation by probing

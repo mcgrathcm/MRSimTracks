@@ -64,6 +64,33 @@ result = mt.track_parallel(
 
 Each worker reloads the field, so memory use scales with `n_workers`.
 
+## Ground-Truth Velocity Images
+
+Sample a Cartesian image directly from the loaded CFD field:
+
+```python
+image = mt.sample_velocity_image(
+    flow,
+    fov=(12.6, 2.6, 16.4),       # full widths in native (x,y,z) mesh units
+    resolution=0.2,              # isotropic voxel size in mesh units
+    temporal_spacing=0.030,      # output time spacing in seconds
+    temporal_width=0.030,        # exact boxcar average of the linear waveform
+    grid_subsampling=2,          # 2 per axis = 8 samples per voxel
+    reorder_by_extent=False,     # True for largest-to-smallest spatial axes
+)
+
+image.axis_order  # "x,y,z", matching track output
+image.velocity    # (time, x, y, z, component)
+image.occupancy   # (x, y, z)
+image.save("velocity_image.h5")  # sparse spatial support by default
+```
+
+Use `fov=None` for the native mesh bounds. Three FOV widths expand symmetrically
+about the mesh bounding-box center; three explicit `(minimum, maximum)` pairs
+are also accepted. Neither form shifts the coordinate origin.
+Set `temporal_width=0` to linearly interpolate the exact output time instead of
+averaging a window.
+
 ## Wall Slip
 
 Use `WallSlip` when interpolation near no-slip walls deposits particles into a
