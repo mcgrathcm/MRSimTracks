@@ -276,16 +276,16 @@ def _weighted_field(flow, weights):
 
 
 def sample_velocity_image(
-    flow,
+    flow: object,
     *,
-    fov=None,
-    resolution,
-    temporal_spacing,
-    temporal_width,
-    grid_subsampling=1,
-    start_time=0.0,
-    reorder_by_extent=False,
-):
+    fov: object = None,
+    resolution: float | tuple[float, float, float],
+    temporal_spacing: float,
+    temporal_width: float,
+    grid_subsampling: int = 1,
+    start_time: float = 0.0,
+    reorder_by_extent: bool = False,
+) -> VelocityImage:
     """Sample a CFD flow onto a time-resolved Cartesian velocity image.
 
     Args:
