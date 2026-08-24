@@ -102,3 +102,7 @@ def test_load_flow_conform_toggle(tmp_path):
 
     raw = mt.load_flow(path, active_key="Velocity", conform_mesh=False)
     assert not raw._sampler.ok                               # hybrid -> fallback
+    velocity, valid, cells = raw.sample_v(np.array([[0.1, 0.1, 0.1]]), 0.0005)
+    assert valid.tolist() == [True]
+    assert cells is None
+    np.testing.assert_allclose(velocity, [[0.05, 0.05, 0.05]])
