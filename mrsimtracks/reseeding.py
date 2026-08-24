@@ -13,9 +13,8 @@ that are currently inflow -- correct for backflow and partial inflow/outflow on 
 single cap. Flux weighting also makes seed density proportional to local inflow,
 generalizing the old velocity-magnitude weighting.
 
-Velocity on the (static) cap faces is sampled once per frame by locating the face
-sample points in the volume mesh a single time and interpolating each frame's
-field, reusing the fast tet sampler.
+Velocity on the cap faces is sampled once per frame using that frame's geometry
+and field, so moving-node flow series use the correct spatial interpolation.
 """
 
 from os import PathLike
@@ -26,11 +25,7 @@ import pyvista as pv
 
 def _frame_velocity(flow, k):
     """Node velocity array for flow frame index k."""
-    if hasattr(flow, "fields"):                 # StaticPVDFlow (one geom + fields)
-        return np.asarray(flow.fields[k])
-    if hasattr(flow, "meshes"):                 # PVDFlow (full mesh per frame)
-        return np.asarray(flow.meshes[k].point_data[flow.active_key])
-    return np.asarray(flow.mesh.point_data[flow._get_mesh_key(k)])  # SingleVTUFlow
+    return np.asarray(flow._frame_vel(k))
 
 
 class BoundaryReseeder:
@@ -91,8 +86,6 @@ class BoundaryReseeder:
         # Orient normals outward and build interior sample points, using the
         # locator: whichever side of the face finds a containing cell is inside.
         self.normal, self._sample_pt = self._orient(centroid, unit)
-        self._sample_cells = flow._sampler.locate(
-            np.ascontiguousarray(self._sample_pt), guess=None)
 
         self._build_flux_tables()
 
@@ -127,15 +120,16 @@ class BoundaryReseeder:
 
     def _build_flux_tables(self):
         """Per-frame inflow flux per face and its cumulative sum (for sampling)."""
-        loc = self.flow._sampler
-        valid = self._sample_cells >= 0
-        cells_safe = np.where(valid, self._sample_cells, 0)
         nframes = len(self.flow.times)
         self.frame_t = np.asarray(self.flow.times_shift_s)
         self.tmax = self.flow.tmax
 
         self._vn = np.zeros((nframes, self.area.shape[0]))      # signed normal vel
         for k in range(nframes):
+            loc = self.flow._frame_runtime(k).sampler
+            cells = loc.locate(np.ascontiguousarray(self._sample_pt), guess=None)
+            valid = cells >= 0
+            cells_safe = np.where(valid, cells, 0)
             v = loc._interp(self._sample_pt, cells_safe, _frame_velocity(self.flow, k))
             v[~valid] = 0.0
             self._vn[k] = np.einsum("ij,ij->i", v, self.normal)

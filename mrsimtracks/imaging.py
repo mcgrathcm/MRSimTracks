@@ -203,7 +203,9 @@ def _temporal_weights(times, center, width):
 
 
 def _normalize_fov(flow, fov, permutation):
-    mesh_bounds = np.asarray(flow.active_mesh.bounds, dtype=float).reshape(3, 2)
+    mesh_bounds = np.asarray(
+        getattr(flow, "bounds", flow.active_mesh.bounds), dtype=float
+    ).reshape(3, 2)
     output_bounds = mesh_bounds[permutation]
 
     if fov is None:
@@ -313,7 +315,9 @@ def sample_velocity_image(
             occupancy arrays in the same coordinate convention as ``track``.
     """
     requested_resolution = _normalize_resolution(resolution)
-    mesh_bounds = np.asarray(flow.active_mesh.bounds, dtype=float).reshape(3, 2)
+    mesh_bounds = np.asarray(
+        getattr(flow, "bounds", flow.active_mesh.bounds), dtype=float
+    ).reshape(3, 2)
     spans = np.diff(mesh_bounds, axis=1).ravel()
     permutation = (
         np.argsort(-spans, kind="stable")
@@ -350,18 +354,24 @@ def sample_velocity_image(
     occupancy = np.zeros(tuple(shape), dtype=dtype)
     flat_occupancy = occupancy.reshape(-1)
     cell_cache = [None] * ((n_voxels + _VOXEL_CHUNK - 1) // _VOXEL_CHUNK)
+    static_geometry = getattr(flow, "geometry_mode", "static") == "static"
 
     for time_index, weights in enumerate(temporal_weights):
-        field = _weighted_field(flow, weights)
+        field = _weighted_field(flow, weights) if static_geometry else None
         flat_velocity = velocity[time_index].reshape(-1, 3)
         for chunk_index, start in enumerate(range(0, n_voxels, _VOXEL_CHUNK)):
             stop = min(start + _VOXEL_CHUNK, n_voxels)
             ijk = np.column_stack(np.unravel_index(np.arange(start, stop), shape))
             base = fov[:, 0] + (ijk + 0.5) * actual_resolution
             points = _source_points(base, offsets, permutation)
-            values, valid, cells = _sample_field(
-                flow, points, field, guess=cell_cache[chunk_index]
-            )
+            if static_geometry:
+                values, valid, cells = _sample_field(
+                    flow, points, field, guess=cell_cache[chunk_index]
+                )
+            else:
+                values, valid, cells = flow._sample_frame_weights(
+                    points, weights, guess=cell_cache[chunk_index]
+                )
             if time_index == 0:
                 cell_cache[chunk_index] = cells
 

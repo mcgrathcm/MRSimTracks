@@ -6,6 +6,22 @@
     options:
       show_root_heading: true
 
+::: mrsimtracks.motion.load_mesh_motion
+    options:
+      show_root_heading: true
+
+::: mrsimtracks.motion.MeshMotion
+    options:
+      show_root_heading: true
+
+::: mrsimtracks.motion.MaterialPoints
+    options:
+      show_root_heading: true
+
+::: mrsimtracks.motion.MaterialTrajectory
+    options:
+      show_root_heading: true
+
 ## Tracking
 
 ::: mrsimtracks.core.track

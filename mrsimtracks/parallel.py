@@ -2,32 +2,30 @@ import numpy as np
 import pyvista as pv
 
 from .core import TrackingResult, _normalize_method, _track_particles
-from .io import PVDFlow, SingleVTUFlow, StaticPVDFlow, load_flow
+from .io import load_flow
 
 
 def _track_particle_batch(path, seeds, inlet, dt, tmax, method="RK4",
                           active_key="velocity", pbar=False, dt_pvd=None,
-                          only_active_key=True, caps=None, static_pvd=True,
+                          only_active_key=True, caps=None,
                           subsamp=1, rng_seed=None, collect_metrics=False,
                           precision="f64", time_interp="linear", conform_mesh=True,
-                          wall_slip=False, wall_slip_band=0.02):
+                          mesh_mode="auto", wall_slip=False,
+                          wall_slip_band=0.02):
     # Tracking only ever reads active_key, so skip pressure (etc.) by default to
     # speed up the per-worker reload and cut memory.
-    ext = str(path).rsplit(".", 1)[-1].lower()
-    if ext == "vtu":
-        flow = SingleVTUFlow(
-            path, active_key=active_key, pbar=pbar,
-            only_active_key=only_active_key, precision=precision,
-            time_interp=time_interp, conform_mesh=conform_mesh)
-    elif ext == "pvd":
-        # static_pvd: store one geometry + per-frame fields (memory-efficient).
-        # Set False to fall back to the full-mesh-per-frame PVDFlow.
-        cls = StaticPVDFlow if static_pvd else PVDFlow
-        flow = cls(path, active_key=active_key, pbar=pbar, dt=dt_pvd,
-                   subsamp=subsamp, precision=precision, time_interp=time_interp,
-                   conform_mesh=conform_mesh)
-    else:
-        raise ValueError(f"unsupported flow file type: .{ext} (expected .vtu or .pvd)")
+    flow = load_flow(
+        path,
+        active_key=active_key,
+        pbar=pbar,
+        dt=dt_pvd,
+        only_active_key=only_active_key,
+        subsamp=subsamp,
+        precision=precision,
+        time_interp=time_interp,
+        conform_mesh=conform_mesh,
+        mesh_mode=mesh_mode,
+    )
 
     # `caps` (path or labeled surface) enables backflow-aware inflow reseeding.
     # Built per worker since the reseeder samples this worker's own flow field.
@@ -64,12 +62,13 @@ def track_parallel(path, seeds, dt=1e-3, tmax=None, caps=None, inlet=None,
                    n_workers=3, active_key="velocity", method="RK4", subsamp=1,
                    only_active_key=True, pbar=True, rng=None,
                    return_metrics=False, precision="f64", time_interp="linear",
-                   conform_mesh=True, wall_slip=False, wall_slip_band=0.02):
+                   conform_mesh=True, mesh_mode="auto", wall_slip=False,
+                   wall_slip_band=0.02):
     """Track particles in parallel, with each worker reloading the flow field.
 
     Args:
-        path (str | pathlib.Path): Path to a supported flow file (``.vtu`` or
-            ``.pvd``).
+        path (str | pathlib.Path | iterable): A ``.vtu`` or ``.pvd`` path, a
+            directory of per-frame VTUs, or an explicit VTU path iterable.
         seeds (np.ndarray): Initial particle positions as an ``(n, 3)`` array.
         dt (float): Tracking time step in seconds.
         tmax (float | None): Total tracking duration. Defaults to one flow
@@ -93,6 +92,8 @@ def track_parallel(path, seeds, dt=1e-3, tmax=None, caps=None, inlet=None,
             (default) or ``"cubic"`` (Catmull-Rom; requires uniform spacing).
         conform_mesh (bool): Condition the mesh to clean all-tet at load (split
             non-tet cells, drop degenerate cells). Default ``True``.
+        mesh_mode (str): Mesh classification policy passed to ``load_flow``.
+            Default ``"auto"``.
         wall_slip (bool): Apply the near-wall no-penetration projection (built per
             worker from ``caps``). Default ``False``.
         wall_slip_band (float): Slip band as a fraction of vessel diameter when
@@ -113,7 +114,7 @@ def track_parallel(path, seeds, dt=1e-3, tmax=None, caps=None, inlet=None,
 
     if tmax is None:
         flow = load_flow(path, active_key=active_key, subsamp=subsamp,
-                         only_active_key=only_active_key)
+                         only_active_key=only_active_key, mesh_mode=mesh_mode)
         tmax = flow.tmax
         del flow
 
@@ -133,6 +134,7 @@ def track_parallel(path, seeds, dt=1e-3, tmax=None, caps=None, inlet=None,
             pbar=(pbar and i == 0), rng_seed=int(rng_seeds[i]),
             collect_metrics=return_metrics, precision=precision,
             time_interp=time_interp, conform_mesh=conform_mesh,
+            mesh_mode=mesh_mode,
             wall_slip=wall_slip, wall_slip_band=wall_slip_band)
         for i, batch in enumerate(batches)
     )

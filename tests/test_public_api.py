@@ -13,6 +13,7 @@ def test_public_api_exports_expected_names():
         "track",
         "track_parallel",
         "TrackingResult",
+        "MaterialTrajectory",
         "VelocityImage",
         "BoundaryReseeder",
     }

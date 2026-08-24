@@ -16,20 +16,20 @@ array (0..n_caps-1), saved to caps_labeled.vtp.
 import numpy as np
 import pyvista as pv
 
-from ..io import SingleVTUFlow
+from ..io import load_flow
 
 
 def extract_caps(flow_file, out="caps_labeled.vtp", vmag_thresh=0.5, min_faces=20,
                  active_key="velocity"):
-    flow = SingleVTUFlow(flow_file, active_key=active_key, only_active_key=True)
-    full = flow.mesh
+    flow = load_flow(flow_file, active_key=active_key, only_active_key=True)
+    full = flow.active_mesh
     surf = full.extract_surface(algorithm="dataset_surface").triangulate()
     orig = surf.point_data["vtkOriginalPointIds"]
 
     # max |velocity| over all frames at each boundary node (walls stay ~0)
     vmax = np.zeros(surf.n_points)
-    for t in flow.times:
-        v = full.point_data[f"{flow.active_key}_{t:05d}"][orig]
+    for index in range(len(flow.times)):
+        v = flow._frame_vel(index)[orig]
         vmax = np.maximum(vmax, np.linalg.norm(v, axis=1))
 
     # a face is a cap face if any of its nodes carries flow -- this keeps the

@@ -52,7 +52,7 @@ import numpy as np
 import mrsimtracks as mt
 from mrsimtracks.seeding import seed_mesh
 
-# 1. Load a time-resolved flow field (.vtu single-file series or .pvd collection)
+# 1. Load a time-resolved flow field (.vtu, .pvd, directory, or VTU list)
 flow = mt.load_flow("case.pvd", active_key="Velocity")
 
 # 2. (optional) Backflow-aware inflow reseeder from labeled cap surfaces
@@ -77,6 +77,27 @@ result.reset          # (n_steps, n_particles) reseed flags
 result.times          # (n_steps,)
 result.save("tracks.h5")
 ```
+
+For particles attached to a deforming fixed-topology mesh, load nodal motion
+instead of integrating a velocity field:
+
+```python
+motion = mt.load_mesh_motion(
+    "ventricle_mesh.pvd",
+    displacement_key="displacement_base_fixed",
+    dt=0.001,
+)
+particles = motion.seed(100_000, rng=np.random.default_rng(0))
+cloud = motion.point_cloud(particles, time=0.29)
+result = motion.trajectory(particles, output_path="material_motion.h5")
+result.is_file_backed  # True until result.positions is requested
+result.shape           # (n_frames, n_particles, 3)
+result.times           # exact stored/evaluation times
+```
+
+The mesh is tetrahedralized once without adding or removing nodes. Particles
+are seeded uniformly by reference volume and retain fixed tetrahedron-local
+barycentric weights throughout the deformation.
 
 For large single-process runs, write each timestep directly to HDF5 instead of
 keeping all positions in RAM:
@@ -115,7 +136,8 @@ result = mt.track_parallel(
 
 | Function | Purpose |
 |---|---|
-| `load_flow(path, active_key=...)` | Load `.vtu` (one geometry, many time fields) or `.pvd` (series); auto-selects the memory-efficient reader. `subsamp=N` keeps every Nth frame. |
+| `load_flow(path, active_key=..., mesh_mode="auto")` | Load one `.vtu` with time-labeled fields, a `.pvd`, a directory, or a VTU list. Static geometry is stored once; moving coordinates and changed topologies are retained only when needed. Declare `mesh_mode="static"`, `"moving"`, or `"changing_topology"` to skip automatic classification. `subsamp=N` keeps every Nth frame. |
+| `load_mesh_motion(path, displacement_key=None)` | Load fixed-topology nodal motion from moved-node VTUs or a three-component displacement field, then seed and evaluate attached material particles without velocity integration. `trajectory(..., output_path=...)` streams positions and exact times to HDF5. |
 | `sample_velocity_image(flow, ...)` | Sample a dense native-coordinate `(time,x,y,z,component)` velocity image with exact temporal-window and subvoxel averaging and sparse HDF5 save support. Set `reorder_by_extent=True` for largest-to-smallest axes. |
 | `track(flow, seeds=..., dt=..., reseeder=...)` | Single-process tracking → `TrackingResult`. Use `output_path=...` for streamed HDF5 output and `return_metrics=True` for timing metrics. |
 | `track_parallel(path, ..., caps=..., n_workers=...)` | Multi-process tracking → `TrackingResult`. |
