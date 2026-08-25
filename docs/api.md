@@ -36,6 +36,12 @@
     options:
       show_root_heading: true
 
+## Periodic Mapping
+
+::: mrsimtracks.mapping.periodic_mapping
+    options:
+      show_root_heading: true
+
 ## Velocity Images
 
 ::: mrsimtracks.imaging.sample_velocity_image

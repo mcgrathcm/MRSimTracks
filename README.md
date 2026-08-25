@@ -132,12 +132,26 @@ result = mt.track_parallel(
 )
 ```
 
+## Periodic nearest-neighbor mapping
+
+Generate the 1-based destination-to-source map expected by KomaMRI's periodic
+`FlowPath`. Use the original seeds, because the first stored tracking frame is
+already one integration step after them.
+
+```python
+cycle_map = mt.periodic_mapping(seeds, result.positions[-1])
+```
+
+The mapping is not one-to-one: multiple initial locations can select the same
+final particle, and some final particles may not be selected.
+
 ## Key functions
 
 | Function | Purpose |
 |---|---|
 | `load_flow(path, active_key=..., mesh_mode="auto")` | Load one `.vtu` with time-labeled fields, a `.pvd`, a directory, or a VTU list. Static geometry is stored once; moving coordinates and changed topologies are retained only when needed. Declare `mesh_mode="static"`, `"moving"`, or `"changing_topology"` to skip automatic classification. `subsamp=N` keeps every Nth frame. |
 | `load_mesh_motion(path, displacement_key=None)` | Load fixed-topology nodal motion from moved-node VTUs or a three-component displacement field, then seed and evaluate attached material particles without velocity integration. `trajectory(..., output_path=...)` streams positions and exact times to HDF5. |
+| `periodic_mapping(initial_positions, final_positions)` | Build a fast nearest-neighbor destination-to-source map with 1-based indices for KomaMRI periodic `FlowPath` motion. |
 | `sample_velocity_image(flow, ...)` | Sample a dense native-coordinate `(time,x,y,z,component)` velocity image with exact temporal-window and subvoxel averaging and sparse HDF5 save support. Set `reorder_by_extent=True` for largest-to-smallest axes. |
 | `track(flow, seeds=..., dt=..., reseeder=...)` | Single-process tracking → `TrackingResult`. Use `output_path=...` for streamed HDF5 output and `return_metrics=True` for timing metrics. |
 | `track_parallel(path, ..., caps=..., n_workers=...)` | Multi-process tracking → `TrackingResult`. |

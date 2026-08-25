@@ -14,6 +14,7 @@ Typical use:
 from .core import TrackingResult, track
 from .imaging import VelocityImage, sample_velocity_image
 from .io import load_flow
+from .mapping import periodic_mapping
 from .motion import MaterialPoints, MaterialTrajectory, MeshMotion, load_mesh_motion
 from .parallel import track_parallel
 from .reseeding import BoundaryReseeder
@@ -22,6 +23,7 @@ from .wall_slip import WallSlip
 __all__ = [
     "load_flow",
     "load_mesh_motion",
+    "periodic_mapping",
     "sample_velocity_image",
     "track",
     "track_parallel",
