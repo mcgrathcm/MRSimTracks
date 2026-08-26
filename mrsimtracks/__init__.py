@@ -11,6 +11,7 @@ Typical use:
     result.save("tracks.h5")
 """
 
+from .ale import ALEFlow, load_ale_flow
 from .core import TrackingResult, track
 from .imaging import VelocityImage, sample_velocity_image
 from .io import load_flow
@@ -22,12 +23,14 @@ from .wall_slip import WallSlip
 
 __all__ = [
     "load_flow",
+    "load_ale_flow",
     "load_mesh_motion",
     "periodic_mapping",
     "sample_velocity_image",
     "track",
     "track_parallel",
     "TrackingResult",
+    "ALEFlow",
     "MeshMotion",
     "MaterialPoints",
     "MaterialTrajectory",
