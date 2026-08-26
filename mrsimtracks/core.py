@@ -328,7 +328,8 @@ def track(flow, seeds=None, dt=1e-3, tmax=None, reseeder=None, inlet=None,
     """Track particles through a loaded flow field.
 
     Args:
-        flow (object): Loaded flow field from :func:`mrsimtracks.load_flow`.
+        flow (object): Loaded flow field from :func:`mrsimtracks.load_flow` or
+            :func:`mrsimtracks.load_ale_flow`.
         seeds (np.ndarray | pyvista.PolyData): Initial particle positions as an ``(n, 3)`` array or
             ``pyvista.PolyData``.
         dt (float): Tracking time step in seconds.

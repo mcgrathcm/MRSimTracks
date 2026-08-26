@@ -120,3 +120,70 @@ def test_load_ale_flow_requires_displacement(tmp_path):
 
     with pytest.raises(ValueError, match="Displacement.*not found"):
         mt.load_ale_flow(pvd)
+
+
+def test_ale_sampling_uses_interpolated_deformed_mesh(tmp_path):
+    displacement = np.array([1.0, 0.0, 0.0])
+    pvd, _ = _save_series(
+        tmp_path,
+        [
+            _tetra(velocity=0, displacement=0),
+            _tetra(velocity=2, displacement=displacement),
+            _tetra(velocity=4, displacement=2 * displacement),
+        ],
+    )
+    flow = mt.load_ale_flow(pvd)
+
+    velocity, valid, _ = flow.sample_v([[0.6, 0.05, 0.05]], 0.5)
+
+    assert valid.tolist() == [True]
+    np.testing.assert_allclose(velocity, 1.0)
+    np.testing.assert_allclose(flow.active_mesh.points[0], [0.5, 0.0, 0.0])
+
+
+def test_ale_runtime_cache_holds_three_time_states(tmp_path):
+    pvd, _ = _save_series(
+        tmp_path,
+        [_tetra(), _tetra(), _tetra()],
+    )
+    flow = mt.load_ale_flow(pvd)
+    point = np.array([[0.1, 0.1, 0.1]])
+
+    for time in (0.0, 0.5, 0.5, 1.0):
+        flow.sample_v(point, time)
+
+    assert flow._runtime_build_count == 3
+    assert len(flow._runtime_cache) == 3
+
+    flow.sample_v(point, 1.5)
+    assert flow._runtime_build_count == 4
+    assert len(flow._runtime_cache) == 3
+
+
+def test_track_accepts_ale_flow_without_core_special_case(tmp_path):
+    points = 10 * _tetra().points
+    velocity = np.array([0.1, 0.0, 0.0])
+    pvd, _ = _save_series(
+        tmp_path,
+        [
+            _tetra(points=points, velocity=velocity, displacement=0),
+            _tetra(points=points, velocity=velocity, displacement=velocity),
+            _tetra(points=points, velocity=velocity, displacement=2 * velocity),
+        ],
+    )
+    flow = mt.load_ale_flow(pvd)
+    seeds = np.array([[0.5, 0.5, 0.5]])
+
+    result = mt.track(
+        flow,
+        seeds=seeds,
+        inlet=seeds,
+        dt=0.1,
+        tmax=0.2,
+        pbar=False,
+    )
+
+    np.testing.assert_allclose(result.positions[:, 0, 0], [0.51, 0.52])
+    assert not result.reset.any()
+    assert flow._runtime_build_count == 5
+    assert len(flow._runtime_cache) == 3

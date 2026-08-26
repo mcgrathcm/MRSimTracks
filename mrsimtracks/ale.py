@@ -1,27 +1,47 @@
 import os
 
+from collections import OrderedDict
 from collections.abc import Iterable
+from dataclasses import dataclass
 
 import numpy as np
+import pyvista as pv
 
 from tqdm.auto import tqdm
+from vtkmodules.vtkCommonDataModel import vtkStaticCellLocator
 
 from .io import (
     MeshFieldSeries,
     MeshTopology,
     _UnsupportedFastPath,
     _geometry_signatures,
+    _interp_weights,
     _read_array,
     _read_vtu,
     _read_vtu_metadata,
     _resolve_point_array,
     _series_source,
 )
-from .sampler import _condition_mesh, resolve_float_dtype
+from .sampler import _TetSampler, _condition_mesh, resolve_float_dtype
+
+
+@dataclass
+class _ALEFrameRuntime:
+    mesh: pv.UnstructuredGrid
+    locator: vtkStaticCellLocator
+    sampler: _TetSampler
+    velocity: np.ndarray
 
 
 class ALEFlow:
-    """Velocity and displacement fields on one fixed reference mesh."""
+    """Velocity and displacement fields on one fixed reference mesh.
+
+    Sampling occurs in physical coordinates. At each requested time, the
+    reference nodes are displaced, a locator/interpolator is built for that
+    deformed mesh, and physical velocity is sampled there. The three most recent
+    time states are cached, matching the ``t``, ``t + dt/2``, and ``t + dt``
+    states used by RK4.
+    """
 
     def __init__(self, data, velocity_key, displacement_key, times_shift_s):
         if data.geometry_mode != "static":
@@ -29,16 +49,36 @@ class ALEFlow:
         self.data = data
         self.velocity_key = velocity_key
         self.displacement_key = displacement_key
+        self.active_key = velocity_key
+        self.dtype = self.velocity(0).dtype
+        self.time_interp = "linear"
         self.times = np.asarray(data.times)
         self.times_shift_s = np.asarray(times_shift_s, dtype=float)
         if np.any(np.diff(self.times_shift_s) <= 0):
             raise ValueError("ALE flow timesteps must be strictly increasing")
         self.tmax = float(self.times_shift_s[-1])
+        if self.tmax <= 0:
+            raise ValueError("ALE flow duration must be positive")
+
         self.reference_mesh = data.mesh(0)
-        self.reference_mesh.point_data[velocity_key] = self.velocity(0).copy()
-        self.reference_mesh.point_data[displacement_key] = (
-            self.displacement(0).copy()
-        )
+        self.geometry_mode = "ale"
+        self.fields = list(data.point_fields[velocity_key])
+        self._runtime_cache = OrderedDict()
+        self._runtime_build_count = 0
+
+        self.active_mesh = self.get_mesh(0.0)
+        self.mesh = self.active_mesh
+        self._sampler = None
+        self.locator = None
+
+        reference = np.asarray(self.reference_mesh.points)
+        lower = np.full(3, np.inf)
+        upper = np.full(3, -np.inf)
+        for displacement in data.point_fields[displacement_key]:
+            points = reference + displacement
+            lower = np.minimum(lower, points.min(axis=0))
+            upper = np.maximum(upper, points.max(axis=0))
+        self.bounds = tuple(np.column_stack((lower, upper)).ravel())
 
     @property
     def n_frames(self):
@@ -46,6 +86,9 @@ class ALEFlow:
 
     def velocity(self, frame):
         return self.data.field(self.velocity_key, frame)
+
+    def _frame_vel(self, frame):
+        return self.velocity(frame)
 
     def displacement(self, frame):
         return self.data.field(self.displacement_key, frame)
@@ -56,6 +99,110 @@ class ALEFlow:
         mesh.point_data[self.velocity_key] = self.velocity(frame)
         mesh.point_data[self.displacement_key] = self.displacement(frame)
         return mesh
+
+    def _time_state(self, time):
+        indices, weights = _interp_weights(
+            self.times_shift_s,
+            self.tmax,
+            len(self.times),
+            time,
+            self.time_interp,
+        )
+        key = (
+            tuple(int(index) for index in indices),
+            tuple(round(float(weight), 14) for weight in weights),
+        )
+        return key, indices, weights
+
+    @staticmethod
+    def _interpolate(get_frame, indices, weights):
+        output = weights[0] * get_frame(indices[0])
+        for index, weight in zip(indices[1:], weights[1:], strict=True):
+            output = output + weight * get_frame(index)
+        return np.ascontiguousarray(output)
+
+    def _mesh_at_state(self, indices, weights):
+        displacement = self._interpolate(self.displacement, indices, weights)
+        velocity = self._interpolate(self.velocity, indices, weights)
+        points = np.asarray(self.reference_mesh.points) + displacement
+        topology = self.data.topologies[0]
+        mesh = pv.UnstructuredGrid(
+            topology.cells,
+            topology.cell_types,
+            np.ascontiguousarray(points),
+            deep=False,
+        )
+        mesh.point_data[self.velocity_key] = velocity
+        mesh.point_data[self.displacement_key] = displacement
+        return mesh, velocity
+
+    def _runtime(self, time):
+        key, indices, weights = self._time_state(time)
+        runtime = self._runtime_cache.pop(key, None)
+        if runtime is not None:
+            self._runtime_cache[key] = runtime
+            return runtime
+
+        mesh, velocity = self._mesh_at_state(indices, weights)
+        locator = vtkStaticCellLocator()
+        locator.SetDataSet(mesh)
+        locator.BuildLocator()
+        runtime = _ALEFrameRuntime(
+            mesh,
+            locator,
+            _TetSampler(mesh, dtype=self.dtype),
+            velocity,
+        )
+        self._runtime_cache[key] = runtime
+        self._runtime_build_count += 1
+        if len(self._runtime_cache) > 3:
+            self._runtime_cache.popitem(last=False)
+        return runtime
+
+    def get_mesh(self, time):
+        """Return the deformed mesh and interpolated fields at ``time``."""
+        _, indices, weights = self._time_state(time)
+        mesh, _ = self._mesh_at_state(indices, weights)
+        return mesh
+
+    def set_active_time(self, time):
+        runtime = self._runtime(time)
+        self.active_mesh = runtime.mesh
+        self.mesh = runtime.mesh
+        self._sampler = runtime.sampler
+        self.locator = runtime.locator
+
+    def sample_v(self, points_xyz, time, guess=None):
+        """Sample physical velocity on the deformed mesh at ``time``."""
+        points_xyz = np.ascontiguousarray(points_xyz, dtype=self.dtype)
+        runtime = self._runtime(time)
+        self.active_mesh = runtime.mesh
+        self.mesh = runtime.mesh
+        self._sampler = runtime.sampler
+        self.locator = runtime.locator
+        if runtime.sampler.ok:
+            return runtime.sampler.sample(
+                points_xyz, runtime.velocity, guess=guess
+            )
+
+        sampled = pv.PolyData(points_xyz).sample(
+            runtime.mesh,
+            locator=runtime.locator,
+            pass_cell_data=False,
+            pass_point_data=False,
+            pass_field_data=False,
+        )
+        valid = np.asarray(sampled["vtkValidPointMask"]).astype(bool)
+        velocity = np.asarray(sampled[self.velocity_key]).copy()
+        velocity[~valid] = 0
+        return velocity, valid, None
+
+    def sample(self, points, time):
+        velocity, valid, _ = self.sample_v(np.asarray(points.points), time)
+        output = points.copy()
+        output.point_data[self.velocity_key] = velocity
+        output.point_data["vtkValidPointMask"] = valid.astype(np.uint8)
+        return output
 
 
 def _geometry_matches(reference_topology, reference_points, file, keys):
