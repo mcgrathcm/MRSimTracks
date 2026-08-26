@@ -31,6 +31,7 @@ class _ALEFrameRuntime:
     locator: vtkStaticCellLocator
     sampler: _TetSampler
     velocity: np.ndarray
+    mesh_velocity: np.ndarray
 
 
 class ALEFlow:
@@ -43,12 +44,22 @@ class ALEFlow:
     states used by RK4.
     """
 
-    def __init__(self, data, velocity_key, displacement_key, times_shift_s):
+    def __init__(
+        self,
+        data,
+        velocity_key,
+        displacement_key,
+        mesh_velocity_key,
+        times_shift_s,
+        velocity_scale,
+    ):
         if data.geometry_mode != "static":
             raise ValueError("ALEFlow requires one static reference mesh")
         self.data = data
         self.velocity_key = velocity_key
         self.displacement_key = displacement_key
+        self.mesh_velocity_key = mesh_velocity_key
+        self.velocity_scale = float(velocity_scale)
         self.active_key = velocity_key
         self.dtype = self.velocity(0).dtype
         self.time_interp = "linear"
@@ -93,11 +104,18 @@ class ALEFlow:
     def displacement(self, frame):
         return self.data.field(self.displacement_key, frame)
 
+    def mesh_velocity(self, frame):
+        return self.data.field(self.mesh_velocity_key, frame)
+
+    def relative_velocity(self, frame):
+        return self.velocity(frame) - self.mesh_velocity(frame)
+
     def frame(self, frame):
-        """Return the static reference mesh with one frame's two fields."""
+        """Return the static reference mesh with one frame's ALE fields."""
         mesh = self.data.mesh(frame)
         mesh.point_data[self.velocity_key] = self.velocity(frame)
         mesh.point_data[self.displacement_key] = self.displacement(frame)
+        mesh.point_data[self.mesh_velocity_key] = self.mesh_velocity(frame)
         return mesh
 
     def _time_state(self, time):
@@ -124,6 +142,9 @@ class ALEFlow:
     def _mesh_at_state(self, indices, weights):
         displacement = self._interpolate(self.displacement, indices, weights)
         velocity = self._interpolate(self.velocity, indices, weights)
+        mesh_velocity = self._interpolate(
+            self.mesh_velocity, indices, weights
+        )
         points = np.asarray(self.reference_mesh.points) + displacement
         topology = self.data.topologies[0]
         mesh = pv.UnstructuredGrid(
@@ -134,7 +155,8 @@ class ALEFlow:
         )
         mesh.point_data[self.velocity_key] = velocity
         mesh.point_data[self.displacement_key] = displacement
-        return mesh, velocity
+        mesh.point_data[self.mesh_velocity_key] = mesh_velocity
+        return mesh, velocity, mesh_velocity
 
     def _runtime(self, time):
         key, indices, weights = self._time_state(time)
@@ -143,7 +165,7 @@ class ALEFlow:
             self._runtime_cache[key] = runtime
             return runtime
 
-        mesh, velocity = self._mesh_at_state(indices, weights)
+        mesh, velocity, mesh_velocity = self._mesh_at_state(indices, weights)
         locator = vtkStaticCellLocator()
         locator.SetDataSet(mesh)
         locator.BuildLocator()
@@ -152,6 +174,7 @@ class ALEFlow:
             locator,
             _TetSampler(mesh, dtype=self.dtype),
             velocity,
+            mesh_velocity,
         )
         self._runtime_cache[key] = runtime
         self._runtime_build_count += 1
@@ -162,7 +185,7 @@ class ALEFlow:
     def get_mesh(self, time):
         """Return the deformed mesh and interpolated fields at ``time``."""
         _, indices, weights = self._time_state(time)
-        mesh, _ = self._mesh_at_state(indices, weights)
+        mesh, _, _ = self._mesh_at_state(indices, weights)
         return mesh
 
     def set_active_time(self, time):
@@ -172,19 +195,13 @@ class ALEFlow:
         self._sampler = runtime.sampler
         self.locator = runtime.locator
 
-    def sample_v(self, points_xyz, time, guess=None):
-        """Sample physical velocity on the deformed mesh at ``time``."""
+    def _sample_runtime_field(self, points_xyz, runtime, field, guess):
         points_xyz = np.ascontiguousarray(points_xyz, dtype=self.dtype)
-        runtime = self._runtime(time)
-        self.active_mesh = runtime.mesh
-        self.mesh = runtime.mesh
-        self._sampler = runtime.sampler
-        self.locator = runtime.locator
         if runtime.sampler.ok:
-            return runtime.sampler.sample(
-                points_xyz, runtime.velocity, guess=guess
-            )
+            return runtime.sampler.sample(points_xyz, field, guess=guess)
 
+        name = "_sample_field"
+        runtime.mesh.point_data[name] = field
         sampled = pv.PolyData(points_xyz).sample(
             runtime.mesh,
             locator=runtime.locator,
@@ -193,9 +210,26 @@ class ALEFlow:
             pass_field_data=False,
         )
         valid = np.asarray(sampled["vtkValidPointMask"]).astype(bool)
-        velocity = np.asarray(sampled[self.velocity_key]).copy()
+        velocity = np.asarray(sampled[name]).copy()
         velocity[~valid] = 0
         return velocity, valid, None
+
+    def sample_v(self, points_xyz, time, guess=None):
+        """Sample physical velocity on the deformed mesh at ``time``."""
+        runtime = self._runtime(time)
+        self.active_mesh = runtime.mesh
+        self.mesh = runtime.mesh
+        self._sampler = runtime.sampler
+        self.locator = runtime.locator
+        return self._sample_runtime_field(
+            points_xyz, runtime, runtime.velocity, guess
+        )
+
+    def sample_relative_v(self, points_xyz, time, guess=None):
+        """Sample ``Velocity - Mesh_velocity`` on the deformed mesh."""
+        runtime = self._runtime(time)
+        relative = runtime.velocity - runtime.mesh_velocity
+        return self._sample_runtime_field(points_xyz, runtime, relative, guess)
 
     def sample(self, points, time):
         velocity, valid, _ = self.sample_v(np.asarray(points.points), time)
@@ -219,6 +253,8 @@ def _load_static_ale_series(
     *,
     velocity_key,
     displacement_key,
+    mesh_velocity_key,
+    velocity_scale,
     subsamp,
     dt,
     pbar,
@@ -237,8 +273,10 @@ def _load_static_ale_series(
 
     velocities = []
     displacements = []
+    mesh_velocities = []
     canonical_velocity = None
     canonical_displacement = None
+    canonical_mesh_velocity = None
     reference_topology = None
     reference_points = None
     reference_signature = None
@@ -250,11 +288,13 @@ def _load_static_ale_series(
         info = _read_vtu_metadata(file)
         velocity_name = _resolve_point_array(info, velocity_key)
         displacement_name = _resolve_point_array(info, displacement_key)
-        if velocity_name == displacement_name:
+        mesh_velocity_name = _resolve_point_array(info, mesh_velocity_key)
+        if len({velocity_name, displacement_name, mesh_velocity_name}) != 3:
             raise ValueError(
-                "velocity_key and displacement_key must name different arrays"
+                "velocity, displacement, and mesh-velocity keys must name "
+                "different arrays"
             )
-        keys = [velocity_name, displacement_name]
+        keys = [velocity_name, displacement_name, mesh_velocity_name]
         mesh = None
 
         if frame == 0:
@@ -268,6 +308,7 @@ def _load_static_ale_series(
             conditioned = _condition_mesh(mesh) if conform_mesh else mesh
             canonical_velocity = velocity_name
             canonical_displacement = displacement_name
+            canonical_mesh_velocity = mesh_velocity_name
         else:
             if (
                 info.n_points != len(reference_points)
@@ -296,23 +337,35 @@ def _load_static_ale_series(
                     info.array("point", displacement_name),
                     n_tuples=info.n_points,
                 )
+                mesh_velocity = _read_array(
+                    info,
+                    info.array("point", mesh_velocity_name),
+                    n_tuples=info.n_points,
+                )
             except _UnsupportedFastPath:
                 mesh = _read_vtu(file, keys, pbar=False)
         if mesh is not None:
             velocity = np.asarray(mesh.point_data[velocity_name])
             displacement = np.asarray(mesh.point_data[displacement_name])
+            mesh_velocity = np.asarray(mesh.point_data[mesh_velocity_name])
 
         for role, name, field in (
             ("velocity", velocity_name, velocity),
             ("displacement", displacement_name, displacement),
+            ("mesh velocity", mesh_velocity_name, mesh_velocity),
         ):
             if field.shape != (len(reference_points), 3):
                 raise ValueError(
                     f"ALE {role} array {name!r} in {file} has shape {field.shape}; "
                     f"expected {(len(reference_points), 3)}"
                 )
-        velocities.append(np.ascontiguousarray(velocity, dtype=dtype).copy())
+        velocities.append(
+            np.ascontiguousarray(velocity * velocity_scale, dtype=dtype)
+        )
         displacements.append(np.ascontiguousarray(displacement, dtype=dtype).copy())
+        mesh_velocities.append(
+            np.ascontiguousarray(mesh_velocity * velocity_scale, dtype=dtype)
+        )
 
     times_shift_s = raw_times - raw_times[0]
     if dt is not None:
@@ -327,50 +380,74 @@ def _load_static_ale_series(
         point_fields={
             canonical_velocity: tuple(velocities),
             canonical_displacement: tuple(displacements),
+            canonical_mesh_velocity: tuple(mesh_velocities),
         },
     )
-    return data, canonical_velocity, canonical_displacement, times_shift_s
+    return (
+        data,
+        canonical_velocity,
+        canonical_displacement,
+        canonical_mesh_velocity,
+        times_shift_s,
+    )
 
 
 def load_ale_flow(
     path: str | os.PathLike[str] | Iterable[str | os.PathLike[str]],
     velocity_key: str = "Velocity",
     displacement_key: str = "Displacement",
+    mesh_velocity_key: str = "Mesh_velocity",
     *,
     subsamp: int = 1,
     pbar: bool = False,
     dt: float | None = None,
     precision: str = "f64",
     conform_mesh: bool = True,
+    velocity_scale: float = 1.0,
 ) -> ALEFlow:
-    """Load ALE velocity and displacement on a verified static mesh.
+    """Load ALE velocity, mesh velocity, and displacement on a static mesh.
 
     ``path`` may be a PVD collection, a directory of VTUs, or an explicit VTU
     path iterable. Every selected frame must have identical node coordinates and
-    cell connectivity. Both requested point fields are loaded eagerly.
+    cell connectivity. All three requested point fields are loaded eagerly.
 
     Args:
         path: PVD path, VTU directory, or explicit VTU path iterable.
         velocity_key: Three-component physical velocity point field.
         displacement_key: Three-component nodal displacement point field.
+        mesh_velocity_key: Three-component mesh-velocity point field.
         subsamp: Keep every Nth frame.
         pbar: Show load progress.
         dt: Optional multiplier for PVD, directory, or file-list time labels.
         precision: Stored field precision, ``"f64"`` or ``"f32"``.
         conform_mesh: Split supported non-tetrahedral cells and remove
             degenerate tetrahedra on the shared reference mesh.
+        velocity_scale: Multiplier converting both velocity fields to reference
+            mesh spatial units per second. Displacement is not scaled because it
+            must already use the same units as the reference coordinates.
 
     Returns:
         ALEFlow: Static reference mesh with time-resolved velocity and
         displacement fields.
     """
     dtype = resolve_float_dtype(precision)
+    velocity_scale = float(velocity_scale)
+    if not np.isfinite(velocity_scale) or velocity_scale <= 0:
+        raise ValueError("velocity_scale must be finite and > 0")
     entries, _ = _series_source(path, velocity_key)
-    data, velocity_name, displacement_name, times_shift_s = (
+    (
+        data,
+        velocity_name,
+        displacement_name,
+        mesh_velocity_name,
+        times_shift_s,
+    ) = (
         _load_static_ale_series(
             entries,
             velocity_key=velocity_key,
             displacement_key=displacement_key,
+            mesh_velocity_key=mesh_velocity_key,
+            velocity_scale=velocity_scale,
             subsamp=subsamp,
             dt=dt,
             pbar=pbar,
@@ -378,4 +455,11 @@ def load_ale_flow(
             conform_mesh=conform_mesh,
         )
     )
-    return ALEFlow(data, velocity_name, displacement_name, times_shift_s)
+    return ALEFlow(
+        data,
+        velocity_name,
+        displacement_name,
+        mesh_velocity_name,
+        times_shift_s,
+        velocity_scale,
+    )

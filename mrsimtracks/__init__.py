@@ -18,7 +18,7 @@ from .io import load_flow
 from .mapping import periodic_mapping
 from .motion import MaterialPoints, MaterialTrajectory, MeshMotion, load_mesh_motion
 from .parallel import track_parallel
-from .reseeding import BoundaryReseeder
+from .reseeding import ALEBoundaryReseeder, BoundaryReseeder
 from .wall_slip import WallSlip
 
 __all__ = [
@@ -36,5 +36,6 @@ __all__ = [
     "MaterialTrajectory",
     "VelocityImage",
     "BoundaryReseeder",
+    "ALEBoundaryReseeder",
     "WallSlip",
 ]

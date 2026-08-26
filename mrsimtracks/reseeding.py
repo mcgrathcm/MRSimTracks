@@ -17,10 +17,28 @@ Velocity on the cap faces is sampled once per frame using that frame's geometry
 and field, so moving-node flow series use the correct spatial interpolation.
 """
 
+from collections import OrderedDict
+from dataclasses import dataclass
 from os import PathLike
 
 import numpy as np
 import pyvista as pv
+from scipy.spatial import cKDTree
+
+
+@dataclass
+class _ALECapState:
+    a: np.ndarray
+    e1: np.ndarray
+    e2: np.ndarray
+    area: np.ndarray
+    charlen: np.ndarray
+    normal: np.ndarray
+    sample_point: np.ndarray
+    signed_speed: np.ndarray
+    inward_speed: np.ndarray
+    cumulative_flux: np.ndarray
+    total_flux: float
 
 
 def _frame_velocity(flow, k):
@@ -196,3 +214,211 @@ class BoundaryReseeder:
         for r in range(self.n_caps):
             out[:, r] = face_flux[:, self.region == r].sum(axis=1)
         return self.frame_t, out
+
+
+class ALEBoundaryReseeder(BoundaryReseeder):
+    """Flux-weighted reseeding on deforming ALE boundary caps.
+
+    Cap vertices must correspond to nodes of the ALE reference mesh. At each
+    reseeding time the cap is displaced, triangle geometry is recomputed, and
+    face probability is proportional to
+    ``area * max(-(Velocity - Mesh_velocity) . outward_normal, 0)``.
+    """
+
+    def __init__(
+        self,
+        caps,
+        flow,
+        rng=None,
+        region_key="region_id",
+        inward_eps=None,
+        dt=None,
+        verify=True,
+    ):
+        if not hasattr(flow, "sample_relative_v"):
+            raise TypeError("ALEBoundaryReseeder requires an ALEFlow")
+        self.flow = flow
+        self.rng = rng if rng is not None else np.random.default_rng()
+        self.region_key = region_key
+        self.dt = dt
+        self.verify = verify
+        if inward_eps is not None and inward_eps <= 0:
+            raise ValueError("inward_eps must be > 0")
+        self.inward_eps = inward_eps
+        self._state_cache = OrderedDict()
+
+        caps = self._load_caps(caps)
+        self.region = np.asarray(caps.cell_data[region_key]).astype(np.int64)
+        self.n_caps = int(self.region.max()) + 1
+        self._faces = caps.faces.reshape(-1, 4)[:, 1:]
+
+        reference = np.asarray(flow.reference_mesh.points)
+        if "volume_point_id" in caps.point_data:
+            node_ids = np.asarray(caps.point_data["volume_point_id"]).astype(
+                np.int64
+            )
+            if np.any(node_ids < 0) or np.any(node_ids >= len(reference)):
+                raise ValueError("cap volume_point_id contains invalid node ids")
+            distance = np.linalg.norm(reference[node_ids] - caps.points, axis=1)
+        else:
+            distance, node_ids = cKDTree(reference).query(caps.points)
+        tolerance = 1e-6 * (float(np.linalg.norm(np.ptp(reference, axis=0))) or 1.0)
+        if np.any(distance > tolerance):
+            raise ValueError(
+                "ALE cap vertices must match reference volume-mesh nodes; "
+                f"maximum mismatch is {float(distance.max()):.6g}"
+            )
+        self._node_ids = np.asarray(node_ids, dtype=np.int64)
+
+    def _deformed_geometry(self, time):
+        key, indices, weights = self.flow._time_state(time)
+        displacement = self.flow._interpolate(
+            self.flow.displacement, indices, weights
+        )
+        points = (
+            np.asarray(self.flow.reference_mesh.points)[self._node_ids]
+            + displacement[self._node_ids]
+        )
+        triangles = points[self._faces]
+        a = triangles[:, 0]
+        e1 = triangles[:, 1] - a
+        e2 = triangles[:, 2] - a
+        cross = np.cross(e1, e2)
+        twice_area = np.linalg.norm(cross, axis=1)
+        if np.any(twice_area == 0):
+            raise ValueError("deformed ALE cap contains a zero-area triangle")
+        area = 0.5 * twice_area
+        unit = cross / twice_area[:, None]
+        charlen = (
+            np.linalg.norm(e1, axis=1)
+            + np.linalg.norm(e2, axis=1)
+            + np.linalg.norm(e2 - e1, axis=1)
+        ) / 3.0
+        centroid = a + (e1 + e2) / 3.0
+        return key, indices, weights, a, e1, e2, area, unit, charlen, centroid
+
+    def _orient(self, runtime, centroid, unit, charlen):
+        eps = (
+            np.full(len(centroid), float(self.inward_eps))
+            if self.inward_eps is not None
+            else 0.05 * charlen
+        )
+        for _ in range(6):
+            plus = np.ascontiguousarray(centroid + eps[:, None] * unit)
+            minus = np.ascontiguousarray(centroid - eps[:, None] * unit)
+            plus_cells = runtime.sampler.locate(plus, guess=None)
+            minus_cells = runtime.sampler.locate(minus, guess=None)
+            resolved = (plus_cells >= 0) ^ (minus_cells >= 0)
+            if resolved.all():
+                break
+            eps[~resolved] *= 0.25
+        if not resolved.all():
+            raise ValueError(
+                f"could not orient {int((~resolved).sum())} ALE cap faces"
+            )
+        plus_inside = plus_cells >= 0
+        normal = np.where(plus_inside[:, None], -unit, unit)
+        sample_point = np.where(plus_inside[:, None], plus, minus)
+        cells = np.where(plus_inside, plus_cells, minus_cells)
+        return normal, sample_point, cells
+
+    def _cap_state(self, time):
+        key, indices, weights, a, e1, e2, area, unit, charlen, centroid = (
+            self._deformed_geometry(time)
+        )
+        state = self._state_cache.pop(key, None)
+        if state is not None:
+            self._state_cache[key] = state
+            return state
+
+        runtime = self.flow._runtime(time)
+        normal, sample_point, cells = self._orient(
+            runtime, centroid, unit, charlen
+        )
+        relative = self.flow._interpolate(
+            self.flow.relative_velocity, indices, weights
+        )
+        face_velocity = relative[self._node_ids][self._faces].mean(axis=1)
+        signed_speed = np.einsum("ij,ij->i", face_velocity, normal)
+        inward_speed = np.maximum(-signed_speed, 0.0)
+        cumulative_flux = np.cumsum(area * inward_speed)
+        state = _ALECapState(
+            a,
+            e1,
+            e2,
+            area,
+            charlen,
+            normal,
+            sample_point,
+            signed_speed,
+            inward_speed,
+            cumulative_flux,
+            float(cumulative_flux[-1]),
+        )
+        self._state_cache[key] = state
+        if len(self._state_cache) > 3:
+            self._state_cache.popitem(last=False)
+        return state
+
+    def reseed(self, n, t):
+        if n <= 0:
+            return np.empty((0, 3))
+        state = self._cap_state(t)
+        cumulative = state.cumulative_flux
+        total = state.total_flux
+        if total <= 0:
+            cumulative = np.cumsum(state.area)
+            total = float(cumulative[-1])
+
+        faces = np.searchsorted(
+            cumulative, self.rng.random(n) * total, side="right"
+        )
+        np.clip(faces, 0, len(state.area) - 1, out=faces)
+        r1 = self.rng.random(n)
+        r2 = self.rng.random(n)
+        over = r1 + r2 > 1.0
+        r1[over] = 1.0 - r1[over]
+        r2[over] = 1.0 - r2[over]
+        points = (
+            state.a[faces]
+            + r1[:, None] * state.e1[faces]
+            + r2[:, None] * state.e2[faces]
+        )
+
+        if self.dt is None:
+            depth = (
+                np.full(n, float(self.inward_eps))
+                if self.inward_eps is not None
+                else 0.05 * state.charlen[faces]
+            )
+        else:
+            layer = np.maximum(
+                state.inward_speed[faces] * self.dt,
+                state.charlen[faces],
+            )
+            base = (
+                float(self.inward_eps)
+                if self.inward_eps is not None
+                else 0.05 * state.charlen[faces]
+            )
+            depth = base + self.rng.random(n) * layer
+        points -= depth[:, None] * state.normal[faces]
+
+        if self.verify:
+            runtime = self.flow._runtime(t)
+            cells = runtime.sampler.locate(
+                np.ascontiguousarray(points), guess=None
+            )
+            bad = cells < 0
+            if bad.any():
+                points[bad] = state.sample_point[faces[bad]]
+        return points
+
+    def flux_waveform(self):
+        flux = np.zeros((self.flow.n_frames, self.n_caps))
+        for frame, time in enumerate(self.flow.times_shift_s):
+            state = self._cap_state(time)
+            face_flux = state.signed_speed * state.area
+            for region in range(self.n_caps):
+                flux[frame, region] = face_flux[self.region == region].sum()
+        return self.flow.times_shift_s.copy(), flux

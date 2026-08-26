@@ -5,7 +5,9 @@ import pytest
 import mrsimtracks as mt
 
 
-def _tetra(*, points=None, velocity=0.0, displacement=0.0):
+def _tetra(
+    *, points=None, velocity=0.0, displacement=0.0, mesh_velocity=0.0
+):
     if points is None:
         points = np.array(
             [[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]], dtype=float
@@ -17,6 +19,9 @@ def _tetra(*, points=None, velocity=0.0, displacement=0.0):
     )
     mesh.point_data["Velocity"] = np.full((len(points), 3), velocity)
     mesh.point_data["Displacement"] = np.full((len(points), 3), displacement)
+    mesh.point_data["Mesh_velocity"] = np.full(
+        (len(points), 3), mesh_velocity
+    )
     return mesh
 
 
@@ -43,7 +48,43 @@ def _save_series(tmp_path, meshes, times=None):
     return pvd, [path for _, path in entries]
 
 
-def test_load_ale_flow_loads_both_fields_on_one_mesh(tmp_path):
+def _two_tetra_mesh(*, stretch=0.0):
+    first = np.array(
+        [[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]], dtype=float
+    )
+    second = first + np.array([3, 0, 0])
+    points = np.vstack((first, second))
+    cells = np.array(
+        [4, 0, 1, 2, 3, 4, 4, 5, 6, 7], dtype=np.int64
+    )
+    mesh = pv.UnstructuredGrid(
+        cells,
+        np.full(2, pv.CellType.TETRA, np.uint8),
+        points,
+    )
+    velocity = np.zeros((8, 3))
+    velocity[:4, 2] = 2.0
+    velocity[4:, 2] = 1.0
+    displacement = np.zeros((8, 3))
+    displacement[:4, 0] = stretch * first[:, 0]
+    mesh.point_data["Velocity"] = velocity
+    mesh.point_data["Displacement"] = displacement
+    mesh.point_data["Mesh_velocity"] = np.zeros((8, 3))
+    return mesh
+
+
+def _two_tetra_caps(mesh):
+    node_ids = np.array([0, 2, 1, 4, 6, 5])
+    caps = pv.PolyData(
+        mesh.points[node_ids],
+        np.array([3, 0, 1, 2, 3, 3, 4, 5]),
+    )
+    caps.point_data["volume_point_id"] = node_ids
+    caps.cell_data["region_id"] = np.array([0, 1], np.int32)
+    return caps
+
+
+def test_load_ale_flow_loads_all_ale_fields_on_one_mesh(tmp_path):
     pvd, _ = _save_series(
         tmp_path,
         [
@@ -65,7 +106,11 @@ def test_load_ale_flow_loads_both_fields_on_one_mesh(tmp_path):
     np.testing.assert_allclose(flow.velocity(2), 3)
     np.testing.assert_allclose(flow.displacement(2), 0.3)
     assert flow.velocity(0).dtype == np.float32
-    assert set(flow.frame(1).point_data) == {"Velocity", "Displacement"}
+    assert set(flow.frame(1).point_data) == {
+        "Velocity",
+        "Displacement",
+        "Mesh_velocity",
+    }
 
 
 def test_load_ale_flow_accepts_file_subset_and_dt(tmp_path):
@@ -106,6 +151,7 @@ def test_load_ale_flow_rejects_changed_topology_in_any_frame(tmp_path):
     )
     changed.point_data["Velocity"] = np.zeros((4, 3))
     changed.point_data["Displacement"] = np.zeros((4, 3))
+    changed.point_data["Mesh_velocity"] = np.zeros((4, 3))
     pvd, _ = _save_series(tmp_path, [_tetra(), _tetra(), changed])
 
     with pytest.raises(ValueError, match="static topology"):
@@ -120,6 +166,57 @@ def test_load_ale_flow_requires_displacement(tmp_path):
 
     with pytest.raises(ValueError, match="Displacement.*not found"):
         mt.load_ale_flow(pvd)
+
+
+def test_load_ale_flow_requires_mesh_velocity(tmp_path):
+    first = _tetra()
+    second = _tetra()
+    del second.point_data["Mesh_velocity"]
+    pvd, _ = _save_series(tmp_path, [first, second])
+
+    with pytest.raises(ValueError, match="Mesh_velocity.*not found"):
+        mt.load_ale_flow(pvd)
+
+
+@pytest.mark.parametrize("scale", [0, -1, np.inf, np.nan])
+def test_load_ale_flow_rejects_invalid_velocity_scale(tmp_path, scale):
+    pvd, _ = _save_series(tmp_path, [_tetra(), _tetra()])
+
+    with pytest.raises(ValueError, match="velocity_scale"):
+        mt.load_ale_flow(pvd, velocity_scale=scale)
+
+
+def test_load_ale_flow_scales_both_velocity_fields(tmp_path):
+    pvd, _ = _save_series(
+        tmp_path,
+        [
+            _tetra(velocity=1.0, mesh_velocity=0.25),
+            _tetra(velocity=2.0, mesh_velocity=0.5),
+        ],
+    )
+
+    flow = mt.load_ale_flow(pvd, velocity_scale=100)
+
+    np.testing.assert_allclose(flow.velocity(0), 100)
+    np.testing.assert_allclose(flow.mesh_velocity(0), 25)
+    np.testing.assert_allclose(flow.relative_velocity(0), 75)
+    assert flow.velocity_scale == 100
+
+
+def test_ale_relative_sampling_uses_velocity_minus_mesh_velocity(tmp_path):
+    pvd, _ = _save_series(
+        tmp_path,
+        [
+            _tetra(velocity=2, mesh_velocity=0.5),
+            _tetra(velocity=4, mesh_velocity=1.0),
+        ],
+    )
+    flow = mt.load_ale_flow(pvd)
+
+    relative, valid, _ = flow.sample_relative_v([[0.1, 0.1, 0.1]], 0.5)
+
+    assert valid.tolist() == [True]
+    np.testing.assert_allclose(relative, 2.25)
 
 
 def test_ale_sampling_uses_interpolated_deformed_mesh(tmp_path):
@@ -187,3 +284,67 @@ def test_track_accepts_ale_flow_without_core_special_case(tmp_path):
     assert not result.reset.any()
     assert flow._runtime_build_count == 5
     assert len(flow._runtime_cache) == 3
+
+
+def test_ale_reseeding_uses_deformed_area_and_relative_inflow(tmp_path):
+    meshes = [
+        _two_tetra_mesh(stretch=0),
+        _two_tetra_mesh(stretch=1),
+        _two_tetra_mesh(stretch=1),
+    ]
+    pvd, _ = _save_series(tmp_path, meshes)
+    flow = mt.load_ale_flow(pvd)
+    caps = _two_tetra_caps(meshes[0])
+    reseeder = mt.ALEBoundaryReseeder(
+        caps,
+        flow,
+        inward_eps=0.01,
+        rng=np.random.default_rng(1234),
+    )
+
+    initial = reseeder._cap_state(0.0)
+    stretched = reseeder._cap_state(1.0)
+
+    np.testing.assert_allclose(initial.area, [0.5, 0.5])
+    np.testing.assert_allclose(initial.inward_speed, [2.0, 1.0])
+    np.testing.assert_allclose(
+        np.diff(np.r_[0, initial.cumulative_flux]), [1, 0.5]
+    )
+    np.testing.assert_allclose(stretched.area, [1.0, 0.5])
+    np.testing.assert_allclose(
+        np.diff(np.r_[0, stretched.cumulative_flux]), [2, 0.5]
+    )
+
+    points = reseeder.reseed(1000, 1.0)
+    runtime = flow._runtime(1.0)
+    assert np.all(runtime.sampler.locate(points) >= 0)
+    assert len(reseeder._state_cache) == 2
+
+
+def test_track_reseeds_invalid_ale_particle_on_deformed_cap(tmp_path):
+    meshes = [
+        _two_tetra_mesh(stretch=0),
+        _two_tetra_mesh(stretch=0.5),
+        _two_tetra_mesh(stretch=1),
+    ]
+    pvd, _ = _save_series(tmp_path, meshes)
+    flow = mt.load_ale_flow(pvd)
+    reseeder = mt.ALEBoundaryReseeder(
+        _two_tetra_caps(meshes[0]),
+        flow,
+        inward_eps=0.01,
+        rng=np.random.default_rng(1234),
+    )
+
+    result = mt.track(
+        flow,
+        seeds=np.array([[100.0, 100.0, 100.0]]),
+        reseeder=reseeder,
+        dt=0.1,
+        tmax=0.1,
+        pbar=False,
+    )
+
+    assert result.reset.tolist() == [[True]]
+    runtime = flow._runtime(0.0)
+    assert np.all(runtime.sampler.locate(result.positions[0]) >= 0)

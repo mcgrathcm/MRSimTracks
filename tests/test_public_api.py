@@ -19,6 +19,7 @@ def test_public_api_exports_expected_names():
         "MaterialTrajectory",
         "VelocityImage",
         "BoundaryReseeder",
+        "ALEBoundaryReseeder",
     }
 
     assert expected <= set(pt.__all__)
