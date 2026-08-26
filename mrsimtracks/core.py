@@ -134,6 +134,19 @@ class TrackingResult:
             return float(f.attrs["dt"])
 
 
+def _step_count(tmax, dt):
+    """Floor ``tmax / dt`` without dropping an almost-integral final step."""
+    if dt <= 0:
+        raise ValueError("dt must be > 0")
+    if tmax <= 0:
+        raise ValueError("tmax must be > 0")
+    ratio = tmax / dt
+    nearest = round(ratio)
+    if abs(ratio - nearest) <= 1e-12 * max(1.0, abs(ratio)):
+        ratio = nearest
+    return int(np.floor(ratio))
+
+
 class _HDF5TrackWriter:
     def __init__(self, path, n_steps, n_particles, dt, dtype=np.float64):
         import h5py
@@ -202,11 +215,7 @@ def _track_particles(flow_mesh, initial_seeds: pv.PolyData, reset_points: np.nda
 
     rng = rng if rng is not None else np.random.default_rng()
     method = _normalize_method(method)
-    if dt <= 0:
-        raise ValueError("dt must be > 0")
-    if tmax <= 0:
-        raise ValueError("tmax must be > 0")
-    n_steps = int(tmax/dt)
+    n_steps = _step_count(tmax, dt)
     if n_steps < 1:
         raise ValueError("tmax must be at least one dt")
 
@@ -373,7 +382,7 @@ def track(flow, seeds=None, dt=1e-3, tmax=None, reseeder=None, inlet=None,
         tmax = flow.tmax
     inlet_arr = np.empty((0, 3)) if inlet is None else np.asarray(inlet, float)
     metrics = {} if return_metrics else None
-    n_steps = int(tmax / dt)
+    n_steps = _step_count(tmax, dt)
 
     writer = None
     try:

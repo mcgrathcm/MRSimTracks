@@ -3,6 +3,7 @@ import pyvista as pv
 import pytest
 
 import mrsimtracks as mt
+from mrsimtracks.core import _step_count
 
 
 def _tetra(
@@ -23,6 +24,12 @@ def _tetra(
         (len(points), 3), mesh_velocity
     )
     return mesh
+
+
+def test_step_count_preserves_almost_integral_cycle():
+    assert _step_count(0.69, 0.001) == 690
+    assert _step_count(0.69, 0.0005) == 1380
+    assert _step_count(0.69, 0.004) == 172
 
 
 def _save_series(tmp_path, meshes, times=None):
