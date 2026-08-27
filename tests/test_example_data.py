@@ -38,8 +38,8 @@ def test_small_fixture_tracks_with_boundary_reseeding():
         pbar=False,
     )
 
-    assert result.positions.shape == (2, 10, 3)
-    assert result.reset.shape == (2, 10)
+    assert result.positions.shape == (3, 10, 3)
+    assert result.reset.shape == (3, 10)
     assert np.isfinite(result.positions).all()
 
 
@@ -61,17 +61,20 @@ def test_small_fixture_streams_tracks_and_returns_metrics(tmp_path):
 
     assert result.is_file_backed
     assert result.path == path
-    assert result.n_steps == 2
+    assert result.n_steps == 3
     assert result.n_particles == 10
+    np.testing.assert_allclose(result.times, [0.0, 0.002, 0.004])
     assert metrics["n_particles"] == 10
     assert metrics["n_steps"] == 2
     assert metrics["particle_steps_per_s"] > 0
 
     with h5py.File(path, "r") as f:
-        assert f["position"].shape == (2, 10, 3)
-        assert f["reset"].shape == (2, 10)
+        assert f["position"].shape == (3, 10, 3)
+        assert f["reset"].shape == (3, 10)
         assert f.attrs["dt"] == pytest.approx(0.002)
         assert np.isfinite(f["position"][...]).all()
+        np.testing.assert_allclose(f["position"][0], flow.active_mesh.points[:10])
+        assert not f["reset"][0].any()
         expected_position = f["position"][::2]
         expected_reset = f["reset"][::2]
         position_dtype = f["position"].dtype
@@ -81,8 +84,8 @@ def test_small_fixture_streams_tracks_and_returns_metrics(tmp_path):
     result.save(copy_path, time_subsample=2)
 
     with h5py.File(copy_path, "r") as f:
-        assert f["position"].shape == (1, 10, 3)
-        assert f["reset"].shape == (1, 10)
+        assert f["position"].shape == (2, 10, 3)
+        assert f["reset"].shape == (2, 10)
         assert f["position"].dtype == position_dtype
         assert f["reset"].dtype == reset_dtype
         assert f.attrs["dt"] == pytest.approx(0.004)
@@ -154,5 +157,5 @@ def test_full_lfs_fixture_tracks_with_boundary_reseeding():
         pbar=False,
     )
 
-    assert result.positions.shape == (2, 10, 3)
+    assert result.positions.shape == (3, 10, 3)
     assert np.isfinite(result.positions).all()

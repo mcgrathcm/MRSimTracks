@@ -54,7 +54,7 @@ def trajectory_stats(result, initial_positions, movement_eps=1e-4):
     return TrajectoryStats(
         median_displacement=float(np.median(displacement)),
         moving_fraction=float(np.mean(displacement > movement_eps)),
-        reset_fraction=float(np.mean(result.reset)),
+        reset_fraction=float(np.mean(result.reset[1:])),
         finite=bool(np.isfinite(result.positions).all()),
     )
 
@@ -80,8 +80,7 @@ def density_stats(initial_positions, final_positions, bounds, bins=(6, 6, 6)):
 
 def motion_stats(result, initial_positions, dt):
     """JSON-safe motion statistics for regression artifacts."""
-    steps = np.diff(np.concatenate([initial_positions[None], result.positions], axis=0),
-                    axis=0)
+    steps = np.diff(result.positions, axis=0)
     step_distance = np.linalg.norm(steps, axis=2)
     speed = step_distance / dt
     path_length = step_distance.sum(axis=0)
@@ -107,8 +106,7 @@ def motion_stats(result, initial_positions, dt):
 
 def subset_particle_stats(result, initial_positions, dt, indices):
     """Per-particle trajectory summaries for a stable subset."""
-    steps = np.diff(np.concatenate([initial_positions[None], result.positions], axis=0),
-                    axis=0)
+    steps = np.diff(result.positions, axis=0)
     step_distance = np.linalg.norm(steps, axis=2)
     out = []
     for i in indices:
@@ -118,7 +116,7 @@ def subset_particle_stats(result, initial_positions, dt, indices):
             "particle": int(i),
             "path_length": float(path_length),
             "displacement": float(displacement),
-            "mean_speed": float(path_length / (result.n_steps * dt)),
+            "mean_speed": float(path_length / ((result.n_steps - 1) * dt)),
             "max_step_speed": float(step_distance[:, i].max() / dt),
             "reset_count": int(result.reset[:, i].sum()),
             "final_position": [float(v) for v in result.positions[-1, i]],

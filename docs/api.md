@@ -6,6 +6,10 @@
     options:
       show_root_heading: true
 
+::: mrsimtracks.ale.load_ale_flow
+    options:
+      show_root_heading: true
+
 ::: mrsimtracks.motion.load_mesh_motion
     options:
       show_root_heading: true
@@ -55,6 +59,10 @@
 ## Reseeding
 
 ::: mrsimtracks.reseeding.BoundaryReseeder
+    options:
+      show_root_heading: true
+
+::: mrsimtracks.reseeding.ALEBoundaryReseeder
     options:
       show_root_heading: true
 

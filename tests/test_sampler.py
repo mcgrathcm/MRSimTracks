@@ -70,6 +70,90 @@ def test_walk_path_interpolates_linear_field_exactly(sampler, tet_mesh, interior
     np.testing.assert_allclose(v, linear_field(interior_points), rtol=1e-9, atol=1e-9)
 
 
+def test_dynamic_walk_reuses_topology_on_deformed_mesh(sampler, tet_mesh,
+                                                       interior_points):
+    moved = tet_mesh.copy()
+    nodes = np.asarray(moved.points)
+    moved.points = nodes + 0.05 * np.column_stack((
+        nodes[:, 0] * nodes[:, 1],
+        nodes[:, 1] * nodes[:, 2],
+        nodes[:, 2] * nodes[:, 0],
+    ))
+    dynamic = _TetSampler(moved, dynamic=True, topology=sampler)
+    assert dynamic._geom is None
+    assert dynamic._probe is None
+    guesses = sampler.locate(interior_points)
+    weights = sampler._bary(interior_points, guesses)
+    query = np.einsum(
+        "nij,ni->nj", np.asarray(moved.points)[sampler.conn[guesses]], weights
+    )
+    static = _TetSampler(moved)
+
+    v, valid, cells = dynamic.sample(
+        query, linear_field(np.asarray(moved.points)), guess=guesses
+    )
+    expected, expected_valid, _ = static.sample(
+        query, linear_field(np.asarray(moved.points)), guess=guesses
+    )
+
+    assert valid.all()
+    np.testing.assert_array_equal(valid, expected_valid)
+    assert dynamic.conn is sampler.conn
+    assert dynamic._adj is sampler._adj
+    assert dynamic._geom is None
+    assert dynamic._probe is None
+    np.testing.assert_allclose(v, expected, rtol=1e-9, atol=1e-9)
+    np.testing.assert_allclose(v, linear_field(query), rtol=1e-9, atol=1e-9)
+
+    assert dynamic.locate(query[:1])[0] >= 0
+    assert dynamic._geom is not None
+    assert dynamic._probe is not None
+
+
+def test_dynamic_walk_uses_geometry_tolerance_without_boundary_probe(monkeypatch):
+    mesh = pv.UnstructuredGrid(
+        np.array([4, 0, 1, 2, 3]),
+        np.array([pv.CellType.TETRA], np.uint8),
+        np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]], float),
+    )
+    topology = _TetSampler(mesh)
+    dynamic = _TetSampler(mesh, dynamic=True, topology=topology)
+    points = np.array([
+        [-5e-4, 0.2, 0.2],  # inside VTK's 1e-3 * cell-length tolerance
+        [-1e-2, 0.2, 0.2],  # unambiguously outside
+        [0.2, 0.2, 0.2],    # valid point, but deliberately missing its guess
+    ])
+
+    def unexpected_probe(_):
+        raise AssertionError("dynamic boundary/no-guess path used the locator")
+
+    monkeypatch.setattr(dynamic, "_locate_probe", unexpected_probe)
+    velocity = linear_field(mesh.points)
+    sampled, valid, cells = dynamic.sample(
+        points, velocity, guess=np.array([0, 0, -1])
+    )
+
+    assert valid.tolist() == [True, False, False]
+    assert cells.tolist() == [0, -1, -1]
+    np.testing.assert_allclose(sampled[0], linear_field(points[:1])[0])
+    np.testing.assert_array_equal(sampled[1:], 0.0)
+
+    static_probe_calls = 0
+    original_probe = topology._locate_probe
+
+    def counted_probe(query):
+        nonlocal static_probe_calls
+        static_probe_calls += 1
+        return original_probe(query)
+
+    monkeypatch.setattr(topology, "_locate_probe", counted_probe)
+    _, static_valid, _ = topology.sample(
+        points[1:2], velocity, guess=np.array([0])
+    )
+    assert static_valid.tolist() == [False]
+    assert static_probe_calls == 1
+
+
 def test_numpy_walk_locate_finds_containing_cell(sampler, interior_points):
     # locate(guess=...) is the vectorized numpy walk fallback. A point on a shared
     # face may resolve to either adjacent tet, so the invariant is not "same id as

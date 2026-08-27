@@ -37,3 +37,22 @@ times, flux = reseeder.flux_waveform()
 
 The sum across caps should be small relative to the total cap flux for a
 well-resolved incompressible field.
+
+## ALE Flow
+
+For a deforming ALE mesh, use `ALEBoundaryReseeder`. It rebuilds cap geometry
+at each sampled time and weights each face by its current area and inward fluid
+velocity relative to the moving mesh:
+
+```text
+max(-(Velocity - Mesh_velocity) . n, 0) * current_area
+```
+
+```python
+reseeder = mt.ALEBoundaryReseeder(caps, flow, dt=dt)
+result = mt.track(flow, seeds=seeds, reseeder=reseeder, dt=dt)
+```
+
+The cap vertices must correspond to reference volume-mesh nodes. When wall
+nodes have zero relative velocity, `mrsimtracks.dev.extract_ale_caps` can build
+a labeled reference cap surface from the loaded series.
