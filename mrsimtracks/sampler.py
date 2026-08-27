@@ -188,7 +188,7 @@ if _HAVE_NUMBA:
         For each particle, walk from its guess cell toward the query point and,
         on success, interpolate ``vel`` in place. ``out_status``: 0 located &
         interpolated; 1 hit a domain boundary; 2 did not converge; 3 no guess.
-        Non-zero statuses are resolved by the caller's locator fallback.
+        The caller decides which non-zero statuses require a locator fallback.
         """
         n = points.shape[0]
         ncomp = vel.shape[1]
@@ -417,12 +417,21 @@ class _TetSampler:
         self._conn64 = (np.ascontiguousarray(self.conn, dtype=np.int64)
                         if topology is None else topology._conn64)
 
+        # The geometry wrapper and VTK probe are fallback-only. Keep just the
+        # source mesh until the first cold placement or genuine walk stall.
+        self._probe_mesh = mesh
+        self._geom = None
+        self._probe = None
+
+    def _ensure_probe(self):
+        if self._probe is not None:
+            return
+
         # Geometry-only source carrying the cell id as cell data. We never mutate
         # it, so its MTime stays fixed and the probe reuses its built locator.
         geom = pv.UnstructuredGrid()
-        geom.copy_structure(mesh)
+        geom.copy_structure(self._probe_mesh)
         geom.cell_data["cid"] = np.arange(geom.n_cells, dtype=np.int64)
-        self._geom = geom  # keep a reference alive for the probe
 
         # vtkCellTreeLocator resolves interior-point FindCell ~3.5x faster than
         # vtkStaticCellLocator on this tet mesh (the cold-path cost at scale).
@@ -432,7 +441,9 @@ class _TetSampler:
         probe.SetPassCellArrays(True)
         probe.SetPassPointArrays(False)
         probe.SetPassFieldArrays(False)
+        self._geom = geom
         self._probe = probe
+        self._probe_mesh = None
 
     @staticmethod
     def _build_adjacency(conn, n_nodes):
@@ -477,6 +488,7 @@ class _TetSampler:
 
     def _locate_probe(self, points_xyz):
         """Cold-path location: returns (cell id, valid mask) via the reused locator."""
+        self._ensure_probe()
         self._probe.SetInputData(pv.PolyData(np.ascontiguousarray(points_xyz)))
         self._probe.Update()
         out = pv.wrap(self._probe.GetOutput())

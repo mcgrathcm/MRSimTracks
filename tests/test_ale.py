@@ -291,7 +291,7 @@ def test_track_accepts_ale_flow_without_core_special_case(tmp_path):
         pbar=False,
     )
 
-    np.testing.assert_allclose(result.positions[:, 0, 0], [0.51, 0.52])
+    np.testing.assert_allclose(result.positions[:, 0, 0], [0.5, 0.51, 0.52])
     assert not result.reset.any()
     assert flow._runtime_build_count == 5
     assert len(flow._runtime_cache) == 3
@@ -367,7 +367,7 @@ def test_track_reseeds_invalid_ale_particle_on_deformed_cap(tmp_path, monkeypatc
         pbar=False,
     )
 
-    assert result.reset[0].tolist() == [True]
+    assert result.reset[:, 0].tolist() == [False, True, False]
     assert probe_calls == 1  # initial arbitrary seed bootstrap only
     runtime = flow._runtime(0.0)
-    assert np.all(runtime.sampler.locate(result.positions[0]) >= 0)
+    assert np.all(runtime.sampler.locate(result.positions[1:, 0]) >= 0)

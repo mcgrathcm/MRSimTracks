@@ -72,8 +72,75 @@ def test_rk4_resets_when_any_stage_is_outside(invalid_stage):
         pbar=False,
     )
 
-    assert result.reset.tolist() == [[True]]
-    np.testing.assert_array_equal(result.positions[0], inlet)
+    assert result.reset.tolist() == [[False], [True]]
+    np.testing.assert_array_equal(result.positions[0], np.zeros((1, 3)))
+    np.testing.assert_array_equal(result.positions[1], inlet)
+    np.testing.assert_allclose(result.times, [0.0, 0.1])
+
+
+def test_rk4_carries_k4_cell_to_next_step():
+    class CellFlow:
+        dtype = np.dtype(np.float64)
+        tmax = 0.2
+
+        def __init__(self):
+            self.guesses = []
+
+        def sample_v(self, points, time, guess=None):
+            self.guesses.append(None if guess is None else guess.copy())
+            cell = 10 * len(self.guesses)
+            return (
+                np.zeros_like(points),
+                np.ones(len(points), dtype=bool),
+                np.full(len(points), cell, dtype=np.int64),
+            )
+
+    flow = CellFlow()
+    pt.track(
+        flow,
+        seeds=np.zeros((1, 3)),
+        inlet=np.zeros((1, 3)),
+        dt=0.1,
+        tmax=0.2,
+        pbar=False,
+    )
+
+    assert flow.guesses[0] is None
+    np.testing.assert_array_equal(flow.guesses[1], [10])
+    np.testing.assert_array_equal(flow.guesses[2], [20])
+    np.testing.assert_array_equal(flow.guesses[3], [30])
+    np.testing.assert_array_equal(flow.guesses[4], [40])
+
+
+def test_reseed_uses_end_of_step_time():
+    class InvalidFlow:
+        dtype = np.dtype(np.float64)
+        tmax = 0.1
+
+        def sample_v(self, points, time, guess=None):
+            return np.zeros_like(points), np.zeros(len(points), bool), None
+
+    class RecordingReseeder:
+        def __init__(self):
+            self.times = []
+
+        def reseed(self, n, t):
+            self.times.append(t)
+            return np.full((n, 3), 2.0)
+
+    reseeder = RecordingReseeder()
+    result = pt.track(
+        InvalidFlow(),
+        seeds=np.ones((1, 3)),
+        reseeder=reseeder,
+        dt=0.1,
+        tmax=0.1,
+        pbar=False,
+    )
+
+    np.testing.assert_allclose(reseeder.times, [0.1])
+    np.testing.assert_array_equal(result.positions[:, 0], [[1, 1, 1], [2, 2, 2]])
+    assert result.reset[:, 0].tolist() == [False, True]
 
 
 def test_seed_region_rejects_invalid_arguments():

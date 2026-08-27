@@ -57,7 +57,7 @@ def parallel_result(seeds, inlet):
 def test_track_parallel_tracks_every_particle(parallel_result, serial_result):
     result, _ = parallel_result
     assert result.positions.shape == serial_result.positions.shape
-    assert result.positions.shape == (3, N_PARTICLES, 3)
+    assert result.positions.shape == (4, N_PARTICLES, 3)
     assert np.isfinite(result.positions).all()
 
 

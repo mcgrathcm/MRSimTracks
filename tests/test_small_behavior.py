@@ -39,7 +39,8 @@ def test_small_case_particles_move_and_resets_stay_low():
 
     stats = trajectory_stats(result, seeds)
 
-    assert result.positions.shape == (6, N_PARTICLES, 3)
+    assert result.positions.shape == (7, N_PARTICLES, 3)
+    np.testing.assert_allclose(result.positions[0], seeds)
     assert stats.finite
     assert stats.moving_fraction > 0.95
     assert stats.median_displacement > 0.05
@@ -78,7 +79,8 @@ def test_small_case_euler_path_moves_particles():
     )
     stats = trajectory_stats(result, seeds)
 
-    assert result.positions.shape == (2, 32, 3)
+    assert result.positions.shape == (3, 32, 3)
+    np.testing.assert_allclose(result.positions[0], seeds)
     assert stats.finite
     assert stats.moving_fraction > 0.95
     assert stats.median_displacement > 0.01

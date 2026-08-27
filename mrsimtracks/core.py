@@ -12,10 +12,12 @@ class TrackingResult:
 
     Args:
         positions (np.ndarray | None): In-memory particle positions with shape
-            ``(n_steps, n_particles, 3)``.
+            ``(n_states, n_particles, 3)``. State zero contains the initial
+            seeds; subsequent states are separated by ``dt``.
         reset (np.ndarray | None): In-memory reset flags with shape
-            ``(n_steps, n_particles)``. For RK4, a flag is set when any of the
-            four stage queries is outside the flow mesh.
+            ``(n_states, n_particles)``. State zero is always false. For RK4,
+            subsequent flags are set when any of the four stage queries is
+            outside the flow mesh.
         dt (float | None): Tracking time step in seconds.
         path (str | pathlib.Path | None): HDF5 file path for a file-backed
             result.
@@ -149,30 +151,34 @@ def _step_count(tmax, dt):
 
 
 class _HDF5TrackWriter:
-    def __init__(self, path, n_steps, n_particles, dt, dtype=np.float64):
+    def __init__(self, path, n_states, n_particles, dt, dtype=np.float64):
         import h5py
 
         self.path = Path(path)
         self.file = h5py.File(self.path, "w")
         self.positions = self.file.create_dataset(
             "position",
-            shape=(n_steps, n_particles, 3),
+            shape=(n_states, n_particles, 3),
             dtype=dtype,
-            chunks=_hdf5_chunks((n_steps, n_particles, 3)),
+            chunks=_hdf5_chunks((n_states, n_particles, 3)),
         )
         self.reset = self.file.create_dataset(
             "reset",
-            shape=(n_steps, n_particles),
+            shape=(n_states, n_particles),
             dtype=bool,
-            chunks=_hdf5_chunks((n_steps, n_particles)),
+            chunks=_hdf5_chunks((n_states, n_particles)),
         )
         self.file.attrs["dt"] = dt
-        self.file.attrs["n_steps"] = n_steps
+        self.file.attrs["n_steps"] = n_states
         self.file.attrs["n_particles"] = n_particles
 
+    def write_initial(self, positions):
+        self.positions[0] = positions
+        self.reset[0] = False
+
     def write_step(self, index, positions, reset_flags):
-        self.positions[index] = positions
-        self.reset[index] = reset_flags
+        self.positions[index + 1] = positions
+        self.reset[index + 1] = reset_flags
 
     def close(self):
         self.file.close()
@@ -232,8 +238,9 @@ def _track_particles(flow_mesh, initial_seeds: pv.PolyData, reset_points: np.nda
         raise ValueError("provide at least one seed point")
 
     if step_writer is None:
-        positions = np.zeros((n_steps, n_particles, 3), dtype=dtype)
-        reset_flags = np.zeros((n_steps, n_particles), dtype=bool)
+        positions = np.zeros((n_steps + 1, n_particles, 3), dtype=dtype)
+        reset_flags = np.zeros((n_steps + 1, n_particles), dtype=bool)
+        positions[0] = r
     else:
         positions = None
         reset_flags = None
@@ -256,7 +263,8 @@ def _track_particles(flow_mesh, initial_seeds: pv.PolyData, reset_points: np.nda
         return flow_mesh.sample_v(points, t, guess=guess)
 
     # Per-particle cell guess for the temporal-coherence walk; None on the first
-    # step (cold locator) and reset to -1 for recycled particles (forces a probe).
+    # step (cold locator). RK4 carries k4's cell into the next k1 query, while
+    # reseeded ALE particles receive the cap-adjacent cell from their reseeder.
     cells = None
 
     pbar = tqdm(range(n_steps), disable=not pbar)
@@ -277,15 +285,16 @@ def _track_particles(flow_mesh, initial_seeds: pv.PolyData, reset_points: np.nda
             oob |= ~valid
             k3, valid, c = _sample(k2*dt/2 + r, i*dt + dt/2, c)
             oob |= ~valid
-            k4, valid, _ = _sample(k3*dt + r, i*dt + dt, c)
+            k4, valid, c = _sample(k3*dt + r, i*dt + dt, c)
             oob |= ~valid
+            cells = c
 
             v = (k1 + 2*k2 + 2*k3 + k4)/6
         else:
             v = k1
 
         if reset_flags is not None:
-            reset_flags[i, oob] = True
+            reset_flags[i + 1, oob] = True
 
         # Near-wall no-penetration: strip the into-wall velocity so particles
         # slide along walls instead of being deposited and trapped at v~0.
@@ -301,9 +310,11 @@ def _track_particles(flow_mesh, initial_seeds: pv.PolyData, reset_points: np.nda
         newcells = None
         if reseeder is not None:
             if cells is not None and hasattr(reseeder, "reseed_with_cells"):
-                newpos, newcells = reseeder.reseed_with_cells(n_reset, i*dt)
+                newpos, newcells = reseeder.reseed_with_cells(
+                    n_reset, (i + 1)*dt
+                )
             else:
-                newpos = reseeder.reseed(n_reset, i*dt)
+                newpos = reseeder.reseed(n_reset, (i + 1)*dt)
         else:
             newpos = reset_points[rng.integers(
                 low=0, high=reset_points.shape[0], size=n_reset), :]
@@ -315,7 +326,7 @@ def _track_particles(flow_mesh, initial_seeds: pv.PolyData, reset_points: np.nda
             cells[oob] = -1 if newcells is None else newcells
 
         if step_writer is None:
-            positions[i, ...] = r
+            positions[i + 1, ...] = r
         else:
             step_writer.write_step(i, r, oob)
         n_oob = np.sum(oob)
@@ -346,8 +357,10 @@ def track(flow, seeds=None, dt=1e-3, tmax=None, reseeder=None, inlet=None,
           return_metrics=False, wall_slip=None):
     """Track particles through a loaded flow field.
 
-    RK4 particles are recycled when any stage query (``k1`` through ``k4``) is
-    outside the mesh after the sampler's point-location checks.
+    The returned trajectory starts with the initial seeds at ``t=0`` and stores
+    each stepped position at ``dt``, ``2*dt``, and so on. RK4 particles are
+    recycled at the end-of-step time when any stage query (``k1`` through
+    ``k4``) is outside the mesh after the sampler's point-location checks.
 
     Args:
         flow (object): Loaded flow field from :func:`mrsimtracks.load_flow` or
@@ -401,8 +414,9 @@ def track(flow, seeds=None, dt=1e-3, tmax=None, reseeder=None, inlet=None,
     try:
         if output_path is not None:
             writer = _HDF5TrackWriter(
-                output_path, n_steps, seeds.n_points, dt,
+                output_path, n_steps + 1, seeds.n_points, dt,
                 dtype=np.dtype(getattr(flow, "dtype", np.float64)))
+            writer.write_initial(seeds.points)
         pos, reset = _track_particles(
             flow, seeds, inlet_arr, dt, tmax, method=method, pbar=pbar,
             metrics=metrics, reseeder=reseeder, rng=rng, step_writer=writer,
@@ -417,7 +431,7 @@ def track(flow, seeds=None, dt=1e-3, tmax=None, reseeder=None, inlet=None,
         result = TrackingResult(
             dt=dt,
             path=output_path,
-            shape=(n_steps, seeds.n_points, 3),
+            shape=(n_steps + 1, seeds.n_points, 3),
             metrics=metrics,
         )
     if return_metrics:

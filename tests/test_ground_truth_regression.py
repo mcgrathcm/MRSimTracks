@@ -68,8 +68,10 @@ def _retrack_to_stored_grid(flow_path, attrs, seeds):
         flow, seeds=seeds, dt=int_dt, tmax=tmax, method=attrs["method"],
         reseeder=reseeder, rng=np.random.default_rng(seed), pbar=False)
 
-    pos = np.asarray(result.positions)
-    reset = np.asarray(result.reset)
+    # Committed GT files predate the explicit t=0 state. Compare only stepped
+    # positions until those fixtures are regenerated under the new convention.
+    pos = np.asarray(result.positions)[1:]
+    reset = np.asarray(result.reset)[1:]
     if store_every > 1:
         n_s = pos.shape[0] // store_every
         pos = pos[store_every - 1::store_every][:n_s]

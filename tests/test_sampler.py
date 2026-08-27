@@ -80,6 +80,8 @@ def test_dynamic_walk_reuses_topology_on_deformed_mesh(sampler, tet_mesh,
         nodes[:, 2] * nodes[:, 0],
     ))
     dynamic = _TetSampler(moved, dynamic=True, topology=sampler)
+    assert dynamic._geom is None
+    assert dynamic._probe is None
     guesses = sampler.locate(interior_points)
     weights = sampler._bary(interior_points, guesses)
     query = np.einsum(
@@ -98,8 +100,14 @@ def test_dynamic_walk_reuses_topology_on_deformed_mesh(sampler, tet_mesh,
     np.testing.assert_array_equal(valid, expected_valid)
     assert dynamic.conn is sampler.conn
     assert dynamic._adj is sampler._adj
+    assert dynamic._geom is None
+    assert dynamic._probe is None
     np.testing.assert_allclose(v, expected, rtol=1e-9, atol=1e-9)
     np.testing.assert_allclose(v, linear_field(query), rtol=1e-9, atol=1e-9)
+
+    assert dynamic.locate(query[:1])[0] >= 0
+    assert dynamic._geom is not None
+    assert dynamic._probe is not None
 
 
 def test_dynamic_walk_uses_geometry_tolerance_without_boundary_probe(monkeypatch):

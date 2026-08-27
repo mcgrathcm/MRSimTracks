@@ -92,7 +92,7 @@ def test_full_cycle_stability_and_metrics():
     }
     _metrics_path("full_cycle_metrics.json").write_text(json.dumps(metrics, indent=2))
 
-    assert result.positions.shape == (429, N_PARTICLES, 3)
+    assert result.positions.shape == (430, N_PARTICLES, 3)
     assert traj.finite
     assert traj.moving_fraction > 0.98
     assert traj.median_displacement > 1.0
