@@ -28,7 +28,7 @@ from .sampler import _TetSampler, _condition_mesh, resolve_float_dtype
 @dataclass
 class _ALEFrameRuntime:
     mesh: pv.UnstructuredGrid
-    locator: vtkStaticCellLocator
+    locator: vtkStaticCellLocator | None
     sampler: _TetSampler
     velocity: np.ndarray
     mesh_velocity: np.ndarray
@@ -37,11 +37,11 @@ class _ALEFrameRuntime:
 class ALEFlow:
     """Velocity and displacement fields on one fixed reference mesh.
 
-    Sampling occurs in physical coordinates. At each requested time, the
-    reference nodes are displaced, a locator/interpolator is built for that
-    deformed mesh, and physical velocity is sampled there. The three most recent
-    time states are cached, matching the ``t``, ``t + dt/2``, and ``t + dt``
-    states used by RK4.
+    Sampling occurs in physical coordinates. Tet connectivity and adjacency are
+    shared across deformed states; barycentric coordinates are evaluated only in
+    cells visited by the walk, with a per-state locator built lazily for failed
+    walks. The three most recent time states are cached, matching the ``t``,
+    ``t + dt/2``, and ``t + dt`` states used by RK4.
     """
 
     def __init__(
@@ -76,6 +76,7 @@ class ALEFlow:
         self.fields = list(data.point_fields[velocity_key])
         self._runtime_cache = OrderedDict()
         self._runtime_build_count = 0
+        self._sampler_topology = None
 
         self.active_mesh = self.get_mesh(0.0)
         self.mesh = self.active_mesh
@@ -166,13 +167,23 @@ class ALEFlow:
             return runtime
 
         mesh, velocity, mesh_velocity = self._mesh_at_state(indices, weights)
-        locator = vtkStaticCellLocator()
-        locator.SetDataSet(mesh)
-        locator.BuildLocator()
+        sampler = _TetSampler(
+            mesh,
+            dtype=self.dtype,
+            dynamic=True,
+            topology=self._sampler_topology,
+        )
+        if sampler.ok and self._sampler_topology is None:
+            self._sampler_topology = sampler
+        locator = None
+        if not sampler.ok:
+            locator = vtkStaticCellLocator()
+            locator.SetDataSet(mesh)
+            locator.BuildLocator()
         runtime = _ALEFrameRuntime(
             mesh,
             locator,
-            _TetSampler(mesh, dtype=self.dtype),
+            sampler,
             velocity,
             mesh_velocity,
         )

@@ -4,6 +4,7 @@ import pytest
 
 import mrsimtracks as mt
 from mrsimtracks.core import _step_count
+from mrsimtracks.sampler import _TetSampler
 
 
 def _tetra(
@@ -258,6 +259,9 @@ def test_ale_runtime_cache_holds_three_time_states(tmp_path):
 
     assert flow._runtime_build_count == 3
     assert len(flow._runtime_cache) == 3
+    runtimes = list(flow._runtime_cache.values())
+    assert all(runtime.locator is None for runtime in runtimes)
+    assert runtimes[1].sampler._adj is runtimes[0].sampler._adj
 
     flow.sample_v(point, 1.5)
     assert flow._runtime_build_count == 4
@@ -322,13 +326,14 @@ def test_ale_reseeding_uses_deformed_area_and_relative_inflow(tmp_path):
         np.diff(np.r_[0, stretched.cumulative_flux]), [2, 0.5]
     )
 
-    points = reseeder.reseed(1000, 1.0)
+    points, cells = reseeder.reseed_with_cells(1000, 1.0)
     runtime = flow._runtime(1.0)
-    assert np.all(runtime.sampler.locate(points) >= 0)
+    assert np.all(cells >= 0)
+    assert np.all(runtime.sampler._bary(points, cells) >= -runtime.sampler.tol)
     assert len(reseeder._state_cache) == 2
 
 
-def test_track_reseeds_invalid_ale_particle_on_deformed_cap(tmp_path):
+def test_track_reseeds_invalid_ale_particle_on_deformed_cap(tmp_path, monkeypatch):
     meshes = [
         _two_tetra_mesh(stretch=0),
         _two_tetra_mesh(stretch=0.5),
@@ -343,15 +348,26 @@ def test_track_reseeds_invalid_ale_particle_on_deformed_cap(tmp_path):
         rng=np.random.default_rng(1234),
     )
 
+    probe_calls = 0
+    original_probe = _TetSampler._locate_probe
+
+    def counted_probe(self, points):
+        nonlocal probe_calls
+        probe_calls += 1
+        return original_probe(self, points)
+
+    monkeypatch.setattr(_TetSampler, "_locate_probe", counted_probe)
+
     result = mt.track(
         flow,
         seeds=np.array([[100.0, 100.0, 100.0]]),
         reseeder=reseeder,
         dt=0.1,
-        tmax=0.1,
+        tmax=0.2,
         pbar=False,
     )
 
-    assert result.reset.tolist() == [[True]]
+    assert result.reset[0].tolist() == [True]
+    assert probe_calls == 1  # initial arbitrary seed bootstrap only
     runtime = flow._runtime(0.0)
     assert np.all(runtime.sampler.locate(result.positions[0]) >= 0)

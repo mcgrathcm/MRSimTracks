@@ -14,7 +14,8 @@ class TrackingResult:
         positions (np.ndarray | None): In-memory particle positions with shape
             ``(n_steps, n_particles, 3)``.
         reset (np.ndarray | None): In-memory reset flags with shape
-            ``(n_steps, n_particles)``.
+            ``(n_steps, n_particles)``. For RK4, a flag is set when any of the
+            four stage queries is outside the flow mesh.
         dt (float | None): Tracking time step in seconds.
         path (str | pathlib.Path | None): HDF5 file path for a file-backed
             result.
@@ -203,9 +204,9 @@ def _track_particles(flow_mesh, initial_seeds: pv.PolyData, reset_points: np.nda
                      dt, tmax, method="RK4", pbar=True, metrics=None,
                      reseeder=None, rng=None, step_writer=None, wall_slip=None):
     # `metrics` is filled in place with a wall-time breakdown when provided.
-    # reseeder: optional object with reseed(n, t) -> (n, 3); when given, OOB
-    # particles are recycled to currently-inflow boundary faces (handles
-    # backflow) instead of uniformly to the static `reset_points`.
+    # reseeder: optional object with reseed(n, t) -> (n, 3); ALE reseeders may
+    # additionally expose reseed_with_cells(n, t) so recycled particles retain
+    # their flow-topology cell guess without a cold locator on the next step.
 
     if reseeder is None and reset_points.shape[0] == 0:
         raise ValueError(
@@ -265,22 +266,26 @@ def _track_particles(flow_mesh, initial_seeds: pv.PolyData, reset_points: np.nda
         # Sample current time and position
         k1, valid, cells = _sample(r, i*dt, cells)
 
-        # Reset OOB points
+        # A particle is OOB if any integration-stage query leaves the mesh.
         oob = ~valid
-        if reset_flags is not None:
-            reset_flags[i, oob] = True
 
         # Get velocity step
         if method == "RK4":
             # Substep positions stay within ~1 cell, so reuse the running cell
             # guess to seed each walk.
-            k2, _, c = _sample(k1*dt/2 + r, i*dt + dt/2, cells)
-            k3, _, c = _sample(k2*dt/2 + r, i*dt + dt/2, c)
-            k4, _, _ = _sample(k3*dt + r, i*dt + dt, c)
+            k2, valid, c = _sample(k1*dt/2 + r, i*dt + dt/2, cells)
+            oob |= ~valid
+            k3, valid, c = _sample(k2*dt/2 + r, i*dt + dt/2, c)
+            oob |= ~valid
+            k4, valid, _ = _sample(k3*dt + r, i*dt + dt, c)
+            oob |= ~valid
 
             v = (k1 + 2*k2 + 2*k3 + k4)/6
         else:
             v = k1
+
+        if reset_flags is not None:
+            reset_flags[i, oob] = True
 
         # Near-wall no-penetration: strip the into-wall velocity so particles
         # slide along walls instead of being deposited and trapped at v~0.
@@ -293,16 +298,21 @@ def _track_particles(flow_mesh, initial_seeds: pv.PolyData, reset_points: np.nda
         # Move OOB back to the inlet. With a reseeder, recycle to currently-inflow
         # boundary faces (backflow-aware); otherwise draw from the static cloud.
         n_reset = int(np.sum(oob))
+        newcells = None
         if reseeder is not None:
-            newpos = reseeder.reseed(n_reset, i*dt)
+            if cells is not None and hasattr(reseeder, "reseed_with_cells"):
+                newpos, newcells = reseeder.reseed_with_cells(n_reset, i*dt)
+            else:
+                newpos = reseeder.reseed(n_reset, i*dt)
         else:
             newpos = reset_points[rng.integers(
                 low=0, high=reset_points.shape[0], size=n_reset), :]
         r[oob, :] = newpos
 
-        # Recycled particles jumped to the inlet -> their cell guess is stale.
+        # Static reseeds have no cell provenance. ALE reseeds return cells in the
+        # canonical topology shared by every deformed runtime.
         if cells is not None:
-            cells[oob] = -1
+            cells[oob] = -1 if newcells is None else newcells
 
         if step_writer is None:
             positions[i, ...] = r
@@ -335,6 +345,9 @@ def track(flow, seeds=None, dt=1e-3, tmax=None, reseeder=None, inlet=None,
           method="RK4", pbar=True, rng=None, output_path=None,
           return_metrics=False, wall_slip=None):
     """Track particles through a loaded flow field.
+
+    RK4 particles are recycled when any stage query (``k1`` through ``k4``) is
+    outside the mesh after the sampler's point-location checks.
 
     Args:
         flow (object): Loaded flow field from :func:`mrsimtracks.load_flow` or

@@ -30,6 +30,12 @@ _FLOAT_DTYPES = {
 _WALK_TOL = {np.dtype(np.float64): 1e-10, np.dtype(np.float32): 1e-5}
 _WALK_SLACK = {np.dtype(np.float64): 1e-7, np.dtype(np.float32): 1e-4}
 
+# vtkProbeFilter's computed tolerance is 1e-3 of the candidate cell length.
+# Use the same geometry-scaled band for dynamic ALE walks, where a fixed
+# barycentric tolerance is strongly cell-shape dependent. Static walks keep the
+# existing dtype-scaled tolerances and locator fallback.
+_ALE_CELL_TOL_FACTOR = 1e-3
+
 
 def resolve_float_dtype(precision):
     """Map a precision spec to a numpy float dtype (``np.float32``/``np.float64``).
@@ -51,8 +57,131 @@ def resolve_float_dtype(precision):
 
 
 if _HAVE_NUMBA:
+    @njit(inline="always")
+    def _bary_coords(point, cell, Minv, dd, node_xyz, conn, dynamic):
+        if not dynamic:
+            px = point[0] - dd[cell, 0]
+            py = point[1] - dd[cell, 1]
+            pz = point[2] - dd[cell, 2]
+            l0 = (Minv[cell, 0, 0]*px + Minv[cell, 0, 1]*py
+                  + Minv[cell, 0, 2]*pz)
+            l1 = (Minv[cell, 1, 0]*px + Minv[cell, 1, 1]*py
+                  + Minv[cell, 1, 2]*pz)
+            l2 = (Minv[cell, 2, 0]*px + Minv[cell, 2, 1]*py
+                  + Minv[cell, 2, 2]*pz)
+            return l0, l1, l2, 1.0 - l0 - l1 - l2
+
+        n0 = conn[cell, 0]; n1 = conn[cell, 1]
+        n2 = conn[cell, 2]; n3 = conn[cell, 3]
+        dx = node_xyz[n3, 0]; dy = node_xyz[n3, 1]; dz = node_xyz[n3, 2]
+        ax = node_xyz[n0, 0] - dx
+        ay = node_xyz[n0, 1] - dy
+        az = node_xyz[n0, 2] - dz
+        bx = node_xyz[n1, 0] - dx
+        by = node_xyz[n1, 1] - dy
+        bz = node_xyz[n1, 2] - dz
+        cx = node_xyz[n2, 0] - dx
+        cy = node_xyz[n2, 1] - dy
+        cz = node_xyz[n2, 2] - dz
+        qx = point[0] - dx; qy = point[1] - dy; qz = point[2] - dz
+
+        bxcx = by*cz - bz*cy
+        bxcy = bz*cx - bx*cz
+        bxcz = bx*cy - by*cx
+        det = ax*bxcx + ay*bxcy + az*bxcz
+        scale = max(abs(ax), abs(ay), abs(az), abs(bx), abs(by), abs(bz),
+                    abs(cx), abs(cy), abs(cz))
+        if abs(det) <= 32*np.finfo(np.float64).eps*scale*scale*scale:
+            return np.nan, np.nan, np.nan, np.nan
+
+        l0 = (qx*bxcx + qy*bxcy + qz*bxcz) / det
+        l1 = (ax*(qy*cz - qz*cy) + ay*(qz*cx - qx*cz)
+              + az*(qx*cy - qy*cx)) / det
+        l2 = (ax*(by*qz - bz*qy) + ay*(bz*qx - bx*qz)
+              + az*(bx*qy - by*qx)) / det
+        return l0, l1, l2, 1.0 - l0 - l1 - l2
+
+
+    @njit(inline="always")
+    def _point_triangle_distance2(p, a, b, c):
+        """Squared distance from a point to a triangle."""
+        ab0 = b[0] - a[0]; ab1 = b[1] - a[1]; ab2 = b[2] - a[2]
+        ac0 = c[0] - a[0]; ac1 = c[1] - a[1]; ac2 = c[2] - a[2]
+        ap0 = p[0] - a[0]; ap1 = p[1] - a[1]; ap2 = p[2] - a[2]
+        d1 = ab0*ap0 + ab1*ap1 + ab2*ap2
+        d2 = ac0*ap0 + ac1*ap1 + ac2*ap2
+        if d1 <= 0.0 and d2 <= 0.0:
+            return ap0*ap0 + ap1*ap1 + ap2*ap2
+
+        bp0 = p[0] - b[0]; bp1 = p[1] - b[1]; bp2 = p[2] - b[2]
+        d3 = ab0*bp0 + ab1*bp1 + ab2*bp2
+        d4 = ac0*bp0 + ac1*bp1 + ac2*bp2
+        if d3 >= 0.0 and d4 <= d3:
+            return bp0*bp0 + bp1*bp1 + bp2*bp2
+
+        vc = d1*d4 - d3*d2
+        if vc <= 0.0 and d1 >= 0.0 and d3 <= 0.0:
+            v = d1 / (d1 - d3)
+            q0 = ap0 - v*ab0; q1 = ap1 - v*ab1; q2 = ap2 - v*ab2
+            return q0*q0 + q1*q1 + q2*q2
+
+        cp0 = p[0] - c[0]; cp1 = p[1] - c[1]; cp2 = p[2] - c[2]
+        d5 = ab0*cp0 + ab1*cp1 + ab2*cp2
+        d6 = ac0*cp0 + ac1*cp1 + ac2*cp2
+        if d6 >= 0.0 and d5 <= d6:
+            return cp0*cp0 + cp1*cp1 + cp2*cp2
+
+        vb = d5*d2 - d1*d6
+        if vb <= 0.0 and d2 >= 0.0 and d6 <= 0.0:
+            w = d2 / (d2 - d6)
+            q0 = ap0 - w*ac0; q1 = ap1 - w*ac1; q2 = ap2 - w*ac2
+            return q0*q0 + q1*q1 + q2*q2
+
+        va = d3*d6 - d5*d4
+        if va <= 0.0 and (d4 - d3) >= 0.0 and (d5 - d6) >= 0.0:
+            w = (d4 - d3) / ((d4 - d3) + (d5 - d6))
+            bc0 = c[0] - b[0]; bc1 = c[1] - b[1]; bc2 = c[2] - b[2]
+            q0 = bp0 - w*bc0; q1 = bp1 - w*bc1; q2 = bp2 - w*bc2
+            return q0*q0 + q1*q1 + q2*q2
+
+        denom = 1.0 / (va + vb + vc)
+        v = vb * denom
+        w = vc * denom
+        q0 = ap0 - v*ab0 - w*ac0
+        q1 = ap1 - v*ab1 - w*ac1
+        q2 = ap2 - v*ab2 - w*ac2
+        return q0*q0 + q1*q1 + q2*q2
+
+
+    @njit(inline="always")
+    def _within_ale_cell_tolerance(point, cell, node_xyz, conn):
+        """Whether a point is within VTK's cell-length-scaled boundary band."""
+        n0 = conn[cell, 0]; n1 = conn[cell, 1]
+        n2 = conn[cell, 2]; n3 = conn[cell, 3]
+        x0 = node_xyz[n0]; x1 = node_xyz[n1]
+        x2 = node_xyz[n2]; x3 = node_xyz[n3]
+
+        distance2 = min(
+            _point_triangle_distance2(point, x1, x2, x3),
+            _point_triangle_distance2(point, x0, x2, x3),
+            _point_triangle_distance2(point, x0, x1, x3),
+            _point_triangle_distance2(point, x0, x1, x2),
+        )
+        xmin = min(x0[0], x1[0], x2[0], x3[0])
+        xmax = max(x0[0], x1[0], x2[0], x3[0])
+        ymin = min(x0[1], x1[1], x2[1], x3[1])
+        ymax = max(x0[1], x1[1], x2[1], x3[1])
+        zmin = min(x0[2], x1[2], x2[2], x3[2])
+        zmax = max(x0[2], x1[2], x2[2], x3[2])
+        dx = xmax - xmin; dy = ymax - ymin; dz = zmax - zmin
+        cell_length2 = dx*dx + dy*dy + dz*dz
+        return distance2 <= (_ALE_CELL_TOL_FACTOR * _ALE_CELL_TOL_FACTOR
+                             * cell_length2)
+
+
     @njit(parallel=True, cache=True)
-    def _walk_interp_kernel(points, Minv, dd, conn, adj, vel, guess,
+    def _walk_interp_kernel(points, Minv, dd, node_xyz, conn, adj, vel, guess,
+                            dynamic,
                             tol, slack, max_iter, out_v, out_cells, out_status):
         """Per-particle tet walk + barycentric interpolation.
 
@@ -75,26 +204,26 @@ if _HAVE_NUMBA:
             boundary = False
             it = 0
             while it < max_iter:
-                px = points[p, 0] - dd[c, 0]
-                py = points[p, 1] - dd[c, 1]
-                pz = points[p, 2] - dd[c, 2]
-                l0 = Minv[c, 0, 0]*px + Minv[c, 0, 1]*py + Minv[c, 0, 2]*pz
-                l1 = Minv[c, 1, 0]*px + Minv[c, 1, 1]*py + Minv[c, 1, 2]*pz
-                l2 = Minv[c, 2, 0]*px + Minv[c, 2, 1]*py + Minv[c, 2, 2]*pz
-                l3 = 1.0 - l0 - l1 - l2
+                l0, l1, l2, l3 = _bary_coords(
+                    points[p], c, Minv, dd, node_xyz, conn, dynamic
+                )
                 if l0 >= -tol and l1 >= -tol and l2 >= -tol and l3 >= -tol:
+                    accepted = True
+                    break
+                if dynamic and _within_ale_cell_tolerance(
+                        points[p], c, node_xyz, conn):
                     accepted = True
                     break
                 # step across the most-negative face, never back to prev
                 minval = -tol
                 face = -1
-                if l0 < minval and adj[c, 0] != prev:
+                if l0 < minval and (prev < 0 or adj[c, 0] != prev):
                     minval = l0; face = 0
-                if l1 < minval and adj[c, 1] != prev:
+                if l1 < minval and (prev < 0 or adj[c, 1] != prev):
                     minval = l1; face = 1
-                if l2 < minval and adj[c, 2] != prev:
+                if l2 < minval and (prev < 0 or adj[c, 2] != prev):
                     minval = l2; face = 2
-                if l3 < minval and adj[c, 3] != prev:
+                if l3 < minval and (prev < 0 or adj[c, 3] != prev):
                     minval = l3; face = 3
                 if face == -1:
                     # backtrack-stuck on a face/edge: accept if essentially inside
@@ -111,14 +240,12 @@ if _HAVE_NUMBA:
             else:
                 # ran out of iterations: recompute weights for the final cell and
                 # accept only if the point sits essentially inside it
-                px = points[p, 0] - dd[c, 0]
-                py = points[p, 1] - dd[c, 1]
-                pz = points[p, 2] - dd[c, 2]
-                l0 = Minv[c, 0, 0]*px + Minv[c, 0, 1]*py + Minv[c, 0, 2]*pz
-                l1 = Minv[c, 1, 0]*px + Minv[c, 1, 1]*py + Minv[c, 1, 2]*pz
-                l2 = Minv[c, 2, 0]*px + Minv[c, 2, 1]*py + Minv[c, 2, 2]*pz
-                l3 = 1.0 - l0 - l1 - l2
-                accepted = min(l0, l1, l2, l3) >= -slack
+                l0, l1, l2, l3 = _bary_coords(
+                    points[p], c, Minv, dd, node_xyz, conn, dynamic
+                )
+                accepted = (min(l0, l1, l2, l3) >= -slack
+                            if not dynamic else _within_ale_cell_tolerance(
+                                points[p], c, node_xyz, conn))
 
             if accepted:
                 n0 = conn[c, 0]; n1 = conn[c, 1]; n2 = conn[c, 2]; n3 = conn[c, 3]
@@ -208,76 +335,87 @@ class _TetSampler:
     * Temporal-coherence walk (``locate``, with a ``guess``) -- particles move
       far less than a cell per substep, so starting from each particle's previous
       cell and walking across tet faces toward the query point locates it in ~1-2
-      vectorized iterations, several times faster than a fresh locator query.
-      Particles that leave the domain or fail to converge fall back to the probe.
+      vectorized iterations, several times faster than a fresh locator query. A
+      static walk falls back to the probe when unresolved; an ALE walk directly
+      classifies boundary exits and only probes a genuine convergence failure.
 
-    Interpolation is a vectorized barycentric weighting using affine transforms
-    precomputed once per cell. Falls back to ``ok=False`` for non-tet meshes.
+    Static meshes precompute affine transforms for every cell. Dynamic ALE meshes
+    share topology and compute barycentric coordinates only for visited cells.
+    Falls back to ``ok=False`` for non-tet meshes.
     """
 
-    def __init__(self, mesh, dtype=np.float64):
-        # Working precision for the sampling/advection math (points, velocity,
-        # per-cell affine maps). Geometry precompute below stays in f64.
+    def __init__(self, mesh, dtype=np.float64, *, dynamic=False, topology=None):
+        # Working precision for sampling/advection. Geometry calculations stay
+        # in f64 before interpolation into the requested output precision.
         self.dtype = np.dtype(dtype)
         self.tol = _WALK_TOL[self.dtype]
         self.slack = _WALK_SLACK[self.dtype]
+        self.dynamic = bool(dynamic)
 
         self.ok = bool(np.all(np.asarray(mesh.celltypes) == VTK_TETRA))
         if not self.ok:
             return
 
-        # Tet connectivity (n_cells, 4) and node coordinates -- precomputed once.
-        self.conn = mesh.cells.reshape(-1, 5)[:, 1:].copy()
+        # Connectivity and face adjacency depend only on topology. ALE samplers
+        # share them across all deformed time states.
+        if topology is None:
+            self.conn = mesh.cells.reshape(-1, 5)[:, 1:].copy()
+        else:
+            if (not topology.ok or mesh.n_cells != topology.conn.shape[0]
+                    or mesh.n_points != topology.node_xyz.shape[0]):
+                raise ValueError("shared sampler topology does not match mesh")
+            self.conn = topology.conn
         self.node_xyz = np.asarray(mesh.points, dtype=np.float64)
 
-        # Per-cell affine map xyz -> barycentric: l123 = Minv @ (p - d), where d
-        # is the 4th vertex. Precomputed once so both the walk and interpolation
-        # are matrix-vector products (no per-call linear solve). The inverse is
-        # taken in f64 for conditioning, then stored at the working precision.
-        vx = self.node_xyz[self.conn]                       # (nc, 4, 3)
-        d = np.ascontiguousarray(vx[:, 3, :])               # (nc, 3)
-        T = np.stack([vx[:, 0] - d, vx[:, 1] - d,
-                      vx[:, 2] - d], axis=2)                 # (nc, 3, 3)
-        self._d = np.ascontiguousarray(d, dtype=self.dtype)
-
-        # Defensive guard: a degenerate (near-zero-volume) tet has a singular T,
-        # which crashes a batched np.linalg.inv. Such a cell holds no interior, so
-        # no point is ever inside it. Try the inverse directly (free on a clean
-        # mesh -- the usual case after load-time conditioning); only on failure
-        # locate the degenerate cells, invert a placeholder for them, and mark
-        # their affine map NaN so the walk never accepts them (NaN comparisons are
-        # False), routing any query there to the probe.
+        # Static meshes precompute the affine map xyz -> barycentric. Dynamic ALE
+        # meshes instead evaluate barycentrics only in cells visited by a walk.
         nc = self.conn.shape[0]
-        try:
-            Minv = np.linalg.inv(T)
+        if self.dynamic:
+            self._d = np.empty((0, 3), dtype=self.dtype)
+            self._Minv = np.empty((0, 3, 3), dtype=self.dtype)
             self._degenerate = np.zeros(nc, dtype=bool)
-        except np.linalg.LinAlgError:
-            vol = _tet_volumes(self.node_xyz, self.conn)
-            pos = vol[vol > 0]
-            med = np.median(pos) if pos.size else 1.0
-            self._degenerate = vol <= _DEGENERATE_VOL_FRAC * med
-            n_degen = int(np.count_nonzero(self._degenerate))
-            print(f"[mrsimtracks] _TetSampler: caught {n_degen} degenerate "
-                  f"(near-zero-volume) cell(s); excluded from the fast walk "
-                  f"(resolved via the locator probe). Consider mesh conditioning.")
-            T = T.copy()
-            T[self._degenerate] = np.eye(3)                 # avoid singular inverse
-            Minv = np.linalg.inv(T)
-            Minv[self._degenerate] = np.nan                 # never accepted by the walk
-        self._Minv = np.ascontiguousarray(Minv, dtype=self.dtype)
+        else:
+            vx = self.node_xyz[self.conn]                   # (nc, 4, 3)
+            d = np.ascontiguousarray(vx[:, 3, :])           # (nc, 3)
+            T = np.stack([vx[:, 0] - d, vx[:, 1] - d,
+                          vx[:, 2] - d], axis=2)             # (nc, 3, 3)
+            self._d = np.ascontiguousarray(d, dtype=self.dtype)
+
+            # A degenerate tet makes the batch inverse singular. On failure,
+            # exclude those cells from the static fast path and use the probe.
+            try:
+                Minv = np.linalg.inv(T)
+                self._degenerate = np.zeros(nc, dtype=bool)
+            except np.linalg.LinAlgError:
+                vol = _tet_volumes(self.node_xyz, self.conn)
+                pos = vol[vol > 0]
+                med = np.median(pos) if pos.size else 1.0
+                self._degenerate = vol <= _DEGENERATE_VOL_FRAC * med
+                n_degen = int(np.count_nonzero(self._degenerate))
+                print(f"[mrsimtracks] _TetSampler: caught {n_degen} degenerate "
+                      f"(near-zero-volume) cell(s); excluded from the fast walk "
+                      f"(resolved via the locator probe). Consider mesh conditioning.")
+                T = T.copy()
+                T[self._degenerate] = np.eye(3)             # avoid singular inverse
+                Minv = np.linalg.inv(T)
+                Minv[self._degenerate] = np.nan             # never accepted by the walk
+            self._Minv = np.ascontiguousarray(Minv, dtype=self.dtype)
 
         # Tet face adjacency: adj[c, i] is the cell sharing the face opposite
         # local vertex i of cell c (-1 on a domain boundary). Built by matching
         # faces (sorted node triples) that appear in exactly two cells.
-        self._adj = self._build_adjacency(self.conn, self.node_xyz.shape[0])
+        self._adj = (self._build_adjacency(self.conn, self.node_xyz.shape[0])
+                     if topology is None else topology._adj)
         if self._degenerate.any():
             # Treat a step into a degenerate cell as a domain boundary so the
             # walk falls back to the probe instead of reading a NaN affine map.
-            nbr = self._adj
+            nbr = self._adj.copy()
             into_degen = (nbr >= 0) & self._degenerate[np.where(nbr >= 0, nbr, 0)]
             nbr[into_degen] = -1
+            self._adj = nbr
         # Contiguous int64 connectivity for the numba kernel.
-        self._conn64 = np.ascontiguousarray(self.conn, dtype=np.int64)
+        self._conn64 = (np.ascontiguousarray(self.conn, dtype=np.int64)
+                        if topology is None else topology._conn64)
 
         # Geometry-only source carrying the cell id as cell data. We never mutate
         # it, so its MTime stays fixed and the probe reuses its built locator.
@@ -319,6 +457,21 @@ class _TetSampler:
 
     def _bary(self, points_xyz, cells):
         """Barycentric weights (n, 4) of points within their given cells."""
+        if self.dynamic:
+            vertices = self.node_xyz[self.conn[cells]]
+            d = vertices[:, 3]
+            e0 = vertices[:, 0] - d
+            e1 = vertices[:, 1] - d
+            e2 = vertices[:, 2] - d
+            q = points_xyz - d
+            cross12 = np.cross(e1, e2)
+            det = np.einsum("ni,ni->n", e0, cross12)
+            with np.errstate(divide="ignore", invalid="ignore"):
+                l0 = np.einsum("ni,ni->n", q, cross12) / det
+                l1 = np.einsum("ni,ni->n", e0, np.cross(q, e2)) / det
+                l2 = np.einsum("ni,ni->n", e0, np.cross(e1, q)) / det
+            l123 = np.column_stack((l0, l1, l2))
+            return np.column_stack((l123, 1 - l123.sum(axis=1)))
         l123 = np.einsum("nij,nj->ni", self._Minv[cells], points_xyz - self._d[cells])
         return np.concatenate([l123, 1 - l123.sum(1, keepdims=True)], axis=1)
 
@@ -329,6 +482,9 @@ class _TetSampler:
         out = pv.wrap(self._probe.GetOutput())
         cid = np.asarray(out.point_data["cid"])
         valid = np.asarray(out.point_data["vtkValidPointMask"]).astype(bool)
+        if self.dynamic and valid.any():
+            idx = np.where(valid)[0]
+            valid[idx] &= np.isfinite(self._bary(points_xyz[idx], cid[idx])).all(axis=1)
         if self._degenerate.any():
             # A point landing exactly on a zero-volume sliver must not resolve to
             # it (its affine map is NaN); treat as outside the domain.
@@ -360,9 +516,14 @@ class _TetSampler:
             if idx.size == 0:
                 break
             w = self._bary(points_xyz[idx], cells[idx])
-            inside = (w >= -tol).all(axis=1)
+            finite = np.isfinite(w).all(axis=1)
+            inside = finite & (w >= -tol).all(axis=1)
             active[idx[inside]] = False
+            failed = idx[~finite]
+            need_probe[failed] = True
+            active[failed] = False
             out = idx[~inside]
+            out = out[finite[~inside]]
             if out.size:
                 # Cross the face opposite the most-negative barycentric coord, but
                 # never step straight back to the cell we just came from -- that is
@@ -372,7 +533,7 @@ class _TetSampler:
                 face = np.argmin(np.where(back, np.inf, wn), axis=1)
                 nb = self._adj[cells[out], face]
                 boundary = nb < 0
-                need_probe[out[boundary]] = True   # left domain -> confirm w/ probe
+                need_probe[out[boundary]] = True
                 active[out[boundary]] = False
                 mv = out[~boundary]
                 prev[mv] = cells[mv]
@@ -388,6 +549,34 @@ class _TetSampler:
     def _interp(self, points_xyz, cells_safe, vel):
         w = self._bary(points_xyz, cells_safe)
         return np.einsum("nij,ni->nj", vel[self.conn[cells_safe]], w)
+
+    def walk_locate(self, points_xyz, guess, tol=None, slack=None, max_iter=20):
+        """Locate from known topology cells without invoking the probe fallback.
+
+        This is the ALE reseeding path: status 0 is located, while boundary,
+        missing-guess, and non-converged results are returned as cell ``-1``.
+        """
+        if tol is None:
+            tol = self.tol
+        if slack is None:
+            slack = self.slack
+        points_xyz = np.ascontiguousarray(points_xyz, dtype=self.dtype)
+        guess = np.asarray(guess, dtype=np.int64)
+        if not _HAVE_NUMBA:
+            cells = self.locate(points_xyz, guess=guess, tol=tol,
+                                max_iter=max_iter)
+            return cells, np.where(cells >= 0, 0, 2).astype(np.int8)
+
+        n = len(points_xyz)
+        cells = np.empty(n, dtype=np.int64)
+        status = np.empty(n, dtype=np.int8)
+        scratch = np.empty((n, 1), dtype=self.dtype)
+        zeros = np.zeros((self.node_xyz.shape[0], 1), dtype=self.dtype)
+        _walk_interp_kernel(points_xyz, self._Minv, self._d, self.node_xyz,
+                            self._conn64, self._adj, zeros, guess, self.dynamic,
+                            tol, slack, max_iter, scratch, cells, status)
+        cells[status != 0] = -1
+        return cells, status
 
     def sample(self, points_xyz, vel, guess=None, tol=None, slack=None, max_iter=20):
         """Return (velocity (n,3), valid (n,), cells (n,)) for points in the field.
@@ -410,18 +599,24 @@ class _TetSampler:
             v[~valid] = 0.0
             return v, valid, cells
 
-        # Fast path: fused walk + interpolation in one numba kernel; only the
-        # particles it couldn't resolve (boundary/non-converged/no-guess) hit the
-        # locator probe.
+        # Fast path: fused walk + interpolation in one numba kernel. Dynamic ALE
+        # walks classify boundary/no-guess directly; only a genuine walk stall
+        # still needs the lazy locator. Static sampling retains the prior fallback
+        # behavior for every unresolved point.
         n = points_xyz.shape[0]
         v = np.zeros((n, vel.shape[1]), dtype=self.dtype)
         cells = np.empty(n, dtype=np.int64)
         status = np.empty(n, dtype=np.int8)
-        _walk_interp_kernel(points_xyz, self._Minv, self._d, self._conn64, self._adj,
-                            vel, guess.astype(np.int64), tol, slack, max_iter,
-                            v, cells, status)
+        _walk_interp_kernel(points_xyz, self._Minv, self._d, self.node_xyz,
+                            self._conn64, self._adj, vel, guess.astype(np.int64),
+                            self.dynamic, tol, slack, max_iter, v, cells, status)
 
-        need = status != 0
+        if self.dynamic:
+            direct_invalid = (status == 1) | (status == 3)
+            cells[direct_invalid] = -1
+            need = status == 2
+        else:
+            need = status != 0
         if need.any():
             pidx = np.where(need)[0]
             cid_p, valid_p = self._locate_probe(points_xyz[pidx])

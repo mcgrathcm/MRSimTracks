@@ -47,6 +47,35 @@ def test_track_rejects_invalid_seed_shape():
         pt.track(flow=None, seeds=np.zeros((3,)), pbar=False)
 
 
+@pytest.mark.parametrize("invalid_stage", [1, 2, 3, 4])
+def test_rk4_resets_when_any_stage_is_outside(invalid_stage):
+    class StageValidityFlow:
+        dtype = np.dtype(np.float64)
+        tmax = 0.1
+
+        def __init__(self):
+            self.calls = 0
+
+        def sample_v(self, points, time, guess=None):
+            self.calls += 1
+            valid = np.full(len(points), self.calls != invalid_stage)
+            cells = np.where(valid, 0, -1)
+            return np.zeros_like(points), valid, cells
+
+    inlet = np.array([[1.0, 2.0, 3.0]])
+    result = pt.track(
+        StageValidityFlow(),
+        seeds=np.zeros((1, 3)),
+        inlet=inlet,
+        dt=0.1,
+        tmax=0.1,
+        pbar=False,
+    )
+
+    assert result.reset.tolist() == [[True]]
+    np.testing.assert_array_equal(result.positions[0], inlet)
+
+
 def test_seed_region_rejects_invalid_arguments():
     with pytest.raises(ValueError, match="npoints must be"):
         seed_region(mesh=None, npoints=0, bounds=(0, 1, 0, 1, 0, 1))

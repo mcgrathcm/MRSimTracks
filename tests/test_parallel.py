@@ -16,8 +16,8 @@ import mrsimtracks as pt
 from diagnostics import deterministic_cell_center_seeds
 from fixture_paths import ACTIVE_KEY, SMALL_FLOW
 
-DT = 0.002
-TMAX = 0.006            # 3 steps; short enough that interior seeds never recycle
+DT = 0.001
+TMAX = 0.003            # 3 steps; short enough that interior seeds never recycle
 N_PARTICLES = 64
 
 

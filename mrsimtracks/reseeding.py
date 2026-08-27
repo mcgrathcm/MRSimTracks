@@ -35,6 +35,7 @@ class _ALECapState:
     charlen: np.ndarray
     normal: np.ndarray
     sample_point: np.ndarray
+    cells: np.ndarray
     signed_speed: np.ndarray
     inward_speed: np.ndarray
     cumulative_flux: np.ndarray
@@ -270,15 +271,52 @@ class ALEBoundaryReseeder(BoundaryReseeder):
             )
         self._node_ids = np.asarray(node_ids, dtype=np.int64)
 
-    def _deformed_geometry(self, time):
-        key, indices, weights = self.flow._time_state(time)
-        displacement = self.flow._interpolate(
-            self.flow.displacement, indices, weights
+        # ALE topology is invariant: map every cap triangle to its unique
+        # adjacent volume tetrahedron once, in the same cell-id namespace used
+        # by every deformed runtime sampler.
+        sampler = flow._runtime(0.0).sampler
+        cap_nodes = self._node_ids[self._faces]
+        conn = sampler.conn
+        tet_faces = np.stack(
+            [conn[:, [1, 2, 3]], conn[:, [0, 2, 3]],
+             conn[:, [0, 1, 3]], conn[:, [0, 1, 2]]],
+            axis=1,
         )
-        points = (
-            np.asarray(self.flow.reference_mesh.points)[self._node_ids]
-            + displacement[self._node_ids]
-        )
+        boundary_cells, boundary_local = np.where(sampler._adj < 0)
+        boundary_nodes = tet_faces[boundary_cells, boundary_local]
+        maxn = sampler.node_xyz.shape[0] + 1
+
+        def face_key(faces):
+            ordered = np.sort(faces, axis=1).astype(np.int64)
+            return (ordered[:, 0] * maxn + ordered[:, 1]) * maxn + ordered[:, 2]
+
+        boundary_key = face_key(boundary_nodes)
+        order = np.argsort(boundary_key)
+        cap_key = face_key(cap_nodes)
+        found = np.searchsorted(boundary_key[order], cap_key)
+        safe = np.minimum(found, len(order) - 1)
+        if (len(order) == 0
+                or np.any(found == len(order))
+                or np.any(boundary_key[order[safe]] != cap_key)):
+            raise ValueError("ALE cap contains a face not found on the volume boundary")
+        match = order[found]
+        self._face_cells = boundary_cells[match].astype(np.int64)
+        self._face_local = boundary_local[match].astype(np.int8)
+
+        triangles = reference[cap_nodes]
+        cross = np.cross(triangles[:, 1] - triangles[:, 0],
+                         triangles[:, 2] - triangles[:, 0])
+        centroid = triangles.mean(axis=1)
+        opposite = reference[conn[self._face_cells, self._face_local]]
+        orientation = np.einsum("ij,ij->i", cross, opposite - centroid)
+        if np.any(orientation == 0):
+            raise ValueError("could not orient an ALE cap face from its adjacent cell")
+        # Multiply the cap-order normal by this fixed sign to obtain the outward
+        # normal at every non-inverted ALE time state.
+        self._outward_sign = np.where(orientation > 0, -1.0, 1.0)
+
+    def _deformed_geometry(self, runtime):
+        points = runtime.sampler.node_xyz[self._node_ids]
         triangles = points[self._faces]
         a = triangles[:, 0]
         e1 = triangles[:, 1] - a
@@ -295,7 +333,7 @@ class ALEBoundaryReseeder(BoundaryReseeder):
             + np.linalg.norm(e2 - e1, axis=1)
         ) / 3.0
         centroid = a + (e1 + e2) / 3.0
-        return key, indices, weights, a, e1, e2, area, unit, charlen, centroid
+        return a, e1, e2, area, unit, charlen, centroid
 
     def _orient(self, runtime, centroid, unit, charlen):
         eps = (
@@ -303,41 +341,34 @@ class ALEBoundaryReseeder(BoundaryReseeder):
             if self.inward_eps is not None
             else 0.05 * charlen
         )
-        for _ in range(6):
-            plus = np.ascontiguousarray(centroid + eps[:, None] * unit)
-            minus = np.ascontiguousarray(centroid - eps[:, None] * unit)
-            plus_cells = runtime.sampler.locate(plus, guess=None)
-            minus_cells = runtime.sampler.locate(minus, guess=None)
-            resolved = (plus_cells >= 0) ^ (minus_cells >= 0)
-            if resolved.all():
-                break
-            eps[~resolved] *= 0.25
-        if not resolved.all():
-            raise ValueError(
-                f"could not orient {int((~resolved).sum())} ALE cap faces"
-            )
-        plus_inside = plus_cells >= 0
-        normal = np.where(plus_inside[:, None], -unit, unit)
-        sample_point = np.where(plus_inside[:, None], plus, minus)
-        cells = np.where(plus_inside, plus_cells, minus_cells)
-        return normal, sample_point, cells
+        normal = self._outward_sign[:, None] * unit
+        opposite = runtime.sampler.node_xyz[
+            runtime.sampler.conn[self._face_cells, self._face_local]
+        ]
+        inward = opposite - centroid
+        distance = np.linalg.norm(inward, axis=1)
+        if np.any(distance == 0):
+            raise ValueError("deformed ALE cap face collapsed onto its opposite node")
+        # A convex combination of the face centroid and opposite tetra vertex is
+        # guaranteed to lie inside the known adjacent cell. It is the locator-free
+        # fallback if a deeper randomized inlet point cannot be walked.
+        fraction = np.minimum(eps / distance, 0.25)
+        sample_point = centroid + fraction[:, None] * inward
+        return normal, sample_point, self._face_cells
 
     def _cap_state(self, time):
-        key, indices, weights, a, e1, e2, area, unit, charlen, centroid = (
-            self._deformed_geometry(time)
-        )
+        key, _, _ = self.flow._time_state(time)
         state = self._state_cache.pop(key, None)
         if state is not None:
             self._state_cache[key] = state
             return state
 
         runtime = self.flow._runtime(time)
+        a, e1, e2, area, unit, charlen, centroid = self._deformed_geometry(runtime)
         normal, sample_point, cells = self._orient(
             runtime, centroid, unit, charlen
         )
-        relative = self.flow._interpolate(
-            self.flow.relative_velocity, indices, weights
-        )
+        relative = runtime.velocity - runtime.mesh_velocity
         face_velocity = relative[self._node_ids][self._faces].mean(axis=1)
         signed_speed = np.einsum("ij,ij->i", face_velocity, normal)
         inward_speed = np.maximum(-signed_speed, 0.0)
@@ -350,6 +381,7 @@ class ALEBoundaryReseeder(BoundaryReseeder):
             charlen,
             normal,
             sample_point,
+            cells,
             signed_speed,
             inward_speed,
             cumulative_flux,
@@ -360,9 +392,11 @@ class ALEBoundaryReseeder(BoundaryReseeder):
             self._state_cache.popitem(last=False)
         return state
 
-    def reseed(self, n, t):
+    def _reseed(self, n, t, resolve_cells):
         if n <= 0:
-            return np.empty((0, 3))
+            points = np.empty((0, 3))
+            cells = np.empty(0, dtype=np.int64)
+            return points, cells
         state = self._cap_state(t)
         cumulative = state.cumulative_flux
         total = state.total_flux
@@ -404,15 +438,30 @@ class ALEBoundaryReseeder(BoundaryReseeder):
             depth = base + self.rng.random(n) * layer
         points -= depth[:, None] * state.normal[faces]
 
-        if self.verify:
+        cells = state.cells[faces].copy()
+        if resolve_cells:
             runtime = self.flow._runtime(t)
-            cells = runtime.sampler.locate(
-                np.ascontiguousarray(points), guess=None
+            cells, _ = runtime.sampler.walk_locate(
+                np.ascontiguousarray(points), cells
             )
             bad = cells < 0
+            valid = np.where(~bad)[0]
+            if valid.size:
+                weights = runtime.sampler._bary(points[valid], cells[valid])
+                bad[valid] = (weights < -runtime.sampler.tol).any(axis=1)
             if bad.any():
                 points[bad] = state.sample_point[faces[bad]]
+                cells[bad] = state.cells[faces[bad]]
+        return points, cells
+
+    def reseed(self, n, t):
+        """Return ALE-aware seed locations, preserving the public points API."""
+        points, _ = self._reseed(n, t, resolve_cells=self.verify)
         return points
+
+    def reseed_with_cells(self, n, t):
+        """Return seed locations and their flow-topology cell IDs."""
+        return self._reseed(n, t, resolve_cells=True)
 
     def flux_waveform(self):
         flux = np.zeros((self.flow.n_frames, self.n_caps))
