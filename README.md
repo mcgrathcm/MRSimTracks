@@ -109,12 +109,17 @@ result, metrics = mt.track(
     dt=0.002,
     reseeder=reseeder,
     output_path="tracks.h5",
+    time_subsample=10,
     return_metrics=True,
 )
 
 result.is_file_backed  # True until result.positions or result.reset is loaded
 metrics["particle_steps_per_s"]
 ```
+
+`time_subsample=10` stores every tenth integration state. Each stored reset
+flag is true if that particle reset at least once since the previous stored
+state, and the file's `dt` is the resulting stored-state interval.
 
 Run `example.py` for a complete version using the reduced fixture committed in
 `tests/data/`. The full-cycle example flow file is tracked with Git LFS; see
@@ -154,7 +159,7 @@ final particle, and some final particles may not be selected.
 | `load_mesh_motion(path, displacement_key=None)` | Load fixed-topology nodal motion from moved-node VTUs or a three-component displacement field, then seed and evaluate attached material particles without velocity integration. `trajectory(..., output_path=...)` streams positions and exact times to HDF5. |
 | `periodic_mapping(initial_positions, final_positions)` | Build a fast nearest-neighbor destination-to-source map with 1-based indices for KomaMRI periodic `FlowPath` motion. |
 | `sample_velocity_image(flow, ...)` | Sample a dense native-coordinate `(time,x,y,z,component)` velocity image with exact temporal-window and subvoxel averaging and sparse HDF5 save support. Set `reorder_by_extent=True` for largest-to-smallest axes. |
-| `track(flow, seeds=..., dt=..., reseeder=...)` | Single-process tracking → `TrackingResult`. Use `output_path=...` for streamed HDF5 output and `return_metrics=True` for timing metrics. |
+| `track(flow, seeds=..., dt=..., reseeder=...)` | Single-process tracking → `TrackingResult`. Use `output_path=...` for streamed HDF5 output, optionally with `time_subsample=N`, and `return_metrics=True` for timing metrics. |
 | `track_parallel(path, ..., caps=..., n_workers=...)` | Multi-process tracking → `TrackingResult`. |
 | `BoundaryReseeder(caps, flow, dt=...)` | Flux-weighted, time-resolved inflow reseeder. `caps` = cap surface path(s) or a surface with a `region_id` cell array. |
 | `ALEBoundaryReseeder(caps, flow, dt=...)` | ALE reseeder weighted by current deformed face area and inward `Velocity - Mesh_velocity`. |

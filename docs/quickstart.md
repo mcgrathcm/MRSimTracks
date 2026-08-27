@@ -40,12 +40,16 @@ result, metrics = mt.track(
     dt=0.002,
     reseeder=reseeder,
     output_path="tracks.h5",
+    time_subsample=10,
     return_metrics=True,
 )
 
 result.is_file_backed
 metrics["particle_steps_per_s"]
 ```
+
+With `time_subsample=N`, every Nth integration state is stored, `dt` records
+the stored-state interval, and reset flags are accumulated over each interval.
 
 ## Parallel Tracking
 

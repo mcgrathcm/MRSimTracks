@@ -87,7 +87,7 @@ class TrackingResult:
         return cls(path=path)
 
     def save(self, path, time_subsample=1):
-        """Write positions/reset/dt to an HDF5 file."""
+        """Write positions/reset/dt to HDF5, accumulating skipped resets."""
         import h5py
 
         if time_subsample < 1:
@@ -99,7 +99,15 @@ class TrackingResult:
         if self.path is None:
             with h5py.File(path, "w") as f:
                 f.create_dataset("position", data=self.positions[::time_subsample])
-                f.create_dataset("reset", data=self.reset[::time_subsample])
+                reset = self.reset[::time_subsample].copy()
+                for out_i, src_i in enumerate(
+                    range(time_subsample, self.reset.shape[0], time_subsample),
+                    start=1,
+                ):
+                    reset[out_i] = self.reset[
+                        src_i - time_subsample + 1:src_i + 1
+                    ].any(axis=0)
+                f.create_dataset("reset", data=reset)
                 f.attrs["dt"] = self.dt * time_subsample
             return
 
@@ -119,9 +127,22 @@ class TrackingResult:
                 dtype=src_reset.dtype,
                 chunks=_hdf5_chunks((n_out, src_reset.shape[1])),
             )
+            previous_src_i = 0
+            accumulated_reset = np.zeros(src_reset.shape[1], dtype=bool)
             for out_i, src_i in enumerate(range(0, src_pos.shape[0], time_subsample)):
                 pos[out_i] = src_pos[src_i]
-                reset[out_i] = src_reset[src_i]
+                if out_i == 0:
+                    reset[out_i] = src_reset[src_i]
+                else:
+                    accumulated_reset.fill(False)
+                    for reset_i in range(previous_src_i + 1, src_i + 1):
+                        np.logical_or(
+                            accumulated_reset,
+                            src_reset[reset_i],
+                            out=accumulated_reset,
+                        )
+                    reset[out_i] = accumulated_reset
+                previous_src_i = src_i
             dst.attrs["dt"] = self.dt * time_subsample
 
     @staticmethod
@@ -151,25 +172,30 @@ def _step_count(tmax, dt):
 
 
 class _HDF5TrackWriter:
-    def __init__(self, path, n_states, n_particles, dt, dtype=np.float64):
+    def __init__(self, path, n_states, n_particles, dt, dtype=np.float64,
+                 time_subsample=1):
         import h5py
 
         self.path = Path(path)
+        self.time_subsample = time_subsample
+        self.next_state = 1
+        self.accumulated_reset = np.zeros(n_particles, dtype=bool)
+        n_saved_states = len(range(0, n_states, time_subsample))
         self.file = h5py.File(self.path, "w")
         self.positions = self.file.create_dataset(
             "position",
-            shape=(n_states, n_particles, 3),
+            shape=(n_saved_states, n_particles, 3),
             dtype=dtype,
-            chunks=_hdf5_chunks((n_states, n_particles, 3)),
+            chunks=_hdf5_chunks((n_saved_states, n_particles, 3)),
         )
         self.reset = self.file.create_dataset(
             "reset",
-            shape=(n_states, n_particles),
+            shape=(n_saved_states, n_particles),
             dtype=bool,
-            chunks=_hdf5_chunks((n_states, n_particles)),
+            chunks=_hdf5_chunks((n_saved_states, n_particles)),
         )
-        self.file.attrs["dt"] = dt
-        self.file.attrs["n_steps"] = n_states
+        self.file.attrs["dt"] = dt * time_subsample
+        self.file.attrs["n_steps"] = n_saved_states
         self.file.attrs["n_particles"] = n_particles
 
     def write_initial(self, positions):
@@ -177,8 +203,17 @@ class _HDF5TrackWriter:
         self.reset[0] = False
 
     def write_step(self, index, positions, reset_flags):
-        self.positions[index + 1] = positions
-        self.reset[index + 1] = reset_flags
+        np.logical_or(
+            self.accumulated_reset,
+            reset_flags,
+            out=self.accumulated_reset,
+        )
+        if (index + 1) % self.time_subsample != 0:
+            return
+        self.positions[self.next_state] = positions
+        self.reset[self.next_state] = self.accumulated_reset
+        self.next_state += 1
+        self.accumulated_reset.fill(False)
 
     def close(self):
         self.file.close()
@@ -354,7 +389,7 @@ def _track_particles(flow_mesh, initial_seeds: pv.PolyData, reset_points: np.nda
 
 def track(flow, seeds=None, dt=1e-3, tmax=None, reseeder=None, inlet=None,
           method="RK4", pbar=True, rng=None, output_path=None,
-          return_metrics=False, wall_slip=None):
+          return_metrics=False, wall_slip=None, time_subsample=1):
     """Track particles through a loaded flow field.
 
     The returned trajectory starts with the initial seeds at ``t=0`` and stores
@@ -382,6 +417,8 @@ def track(flow, seeds=None, dt=1e-3, tmax=None, reseeder=None, inlet=None,
         output_path (str | pathlib.Path | None): Optional HDF5 path. When
             provided, positions/reset flags are streamed to disk and the
             returned result is file-backed until arrays are accessed.
+        time_subsample (int): With ``output_path``, save every Nth integration
+            state. Reset flags are accumulated over each saved interval.
         return_metrics (bool): When ``True``, return ``(result, metrics)`` with
             loop timing metrics.
         wall_slip (WallSlip | None): Optional near-wall no-penetration projection
@@ -396,6 +433,8 @@ def track(flow, seeds=None, dt=1e-3, tmax=None, reseeder=None, inlet=None,
     """
     if seeds is None:
         raise ValueError("provide seeds for tracking")
+    if time_subsample < 1:
+        raise ValueError("time_subsample must be >= 1")
     method = _normalize_method(method)
     if not isinstance(seeds, pv.PolyData):
         seed_arr = np.asarray(seeds, float)
@@ -415,7 +454,8 @@ def track(flow, seeds=None, dt=1e-3, tmax=None, reseeder=None, inlet=None,
         if output_path is not None:
             writer = _HDF5TrackWriter(
                 output_path, n_steps + 1, seeds.n_points, dt,
-                dtype=np.dtype(getattr(flow, "dtype", np.float64)))
+                dtype=np.dtype(getattr(flow, "dtype", np.float64)),
+                time_subsample=time_subsample)
             writer.write_initial(seeds.points)
         pos, reset = _track_particles(
             flow, seeds, inlet_arr, dt, tmax, method=method, pbar=pbar,
@@ -428,10 +468,11 @@ def track(flow, seeds=None, dt=1e-3, tmax=None, reseeder=None, inlet=None,
     if output_path is None:
         result = TrackingResult(pos, reset, dt, metrics=metrics)
     else:
+        n_saved_states = len(range(0, n_steps + 1, time_subsample))
         result = TrackingResult(
-            dt=dt,
+            dt=dt * time_subsample,
             path=output_path,
-            shape=(n_steps + 1, seeds.n_points, 3),
+            shape=(n_saved_states, seeds.n_points, 3),
             metrics=metrics,
         )
     if return_metrics:

@@ -154,20 +154,88 @@ def test_seed_region_rejects_invalid_arguments():
         seed_region(mesh=None, npoints=1, bounds=(0, 0, 0, 1, 0, 1))
 
 
-def test_tracking_result_save_writes_expected_hdf5_schema(tmp_path):
+@pytest.mark.parametrize("file_backed", [False, True])
+def test_tracking_result_save_subsamples_positions_and_accumulates_resets(
+    tmp_path, file_backed
+):
+    reset = np.array([
+        [False, False, False],
+        [True, False, False],
+        [False, False, False],
+        [False, True, False],
+        [False, False, True],
+    ])
     result = pt.TrackingResult(
-        positions=np.arange(4 * 3 * 3, dtype=float).reshape(4, 3, 3),
-        reset=np.zeros((4, 3), dtype=bool),
+        positions=np.arange(5 * 3 * 3, dtype=float).reshape(5, 3, 3),
+        reset=reset,
         dt=0.002,
     )
+    if file_backed:
+        source_path = tmp_path / "source-tracks.h5"
+        result.save(source_path)
+        result = pt.TrackingResult.open(source_path)
 
     path = tmp_path / "tracks.h5"
     result.save(path, time_subsample=2)
 
     with h5py.File(path, "r") as f:
-        assert f["position"].shape == (2, 3, 3)
-        assert f["reset"].shape == (2, 3)
+        assert f["position"].shape == (3, 3, 3)
+        np.testing.assert_array_equal(
+            f["position"][...],
+            np.arange(5 * 3 * 3, dtype=float).reshape(5, 3, 3)[::2],
+        )
+        np.testing.assert_array_equal(
+            f["reset"][...],
+            [
+                [False, False, False],
+                [True, False, False],
+                [False, True, True],
+            ],
+        )
         assert f.attrs["dt"] == pytest.approx(0.004)
+
+
+def test_track_stream_subsamples_and_accumulates_resets(tmp_path):
+    class AlternatingValidityFlow:
+        dtype = np.dtype(np.float64)
+        tmax = 0.4
+
+        def __init__(self):
+            self.calls = 0
+
+        def sample_v(self, points, time, guess=None):
+            step = self.calls // 4
+            self.calls += 1
+            valid = np.full(len(points), step not in {0, 2})
+            cells = np.where(valid, 0, -1)
+            return np.full_like(points, step + 1), valid, cells
+
+    path = tmp_path / "streamed-tracks.h5"
+    result = pt.track(
+        AlternatingValidityFlow(),
+        seeds=np.zeros((1, 3)),
+        inlet=np.ones((1, 3)),
+        dt=0.1,
+        tmax=0.4,
+        pbar=False,
+        output_path=path,
+        time_subsample=2,
+    )
+
+    assert result.is_file_backed
+    assert result.n_steps == 3
+    assert result.dt == pytest.approx(0.2)
+    np.testing.assert_allclose(result.times, [0.0, 0.2, 0.4])
+
+    with h5py.File(path, "r") as f:
+        assert f["position"].shape == (3, 1, 3)
+        assert f["reset"].shape == (3, 1)
+        assert f.attrs["dt"] == pytest.approx(0.2)
+        np.testing.assert_allclose(
+            f["position"][:, 0],
+            [[0.0, 0.0, 0.0], [1.2, 1.2, 1.2], [1.4, 1.4, 1.4]],
+        )
+        np.testing.assert_array_equal(f["reset"][:, 0], [False, True, True])
 
 
 def test_tracking_result_open_is_file_backed(tmp_path):
