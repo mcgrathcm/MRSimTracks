@@ -75,10 +75,11 @@ time interval. The coordinate-series loader compares midpoint topology to the
 reference frame; mesh conditioning and periodic closure remain input-data
 responsibilities.
 
-`MeshMotion.trajectory` returns a `MaterialTrajectory`. Without `output_path`,
-positions are held in memory. With an HDF5 output path, each time frame is
-evaluated and written immediately, keeping working memory independent of the
-number of output frames. The file contains `position` with shape
+`MeshMotion.trajectory` returns a `MaterialTrajectory`. It shows a progress bar
+over evaluated frames by default; pass `pbar=False` for quiet execution. Without
+`output_path`, positions are held in memory. With an HDF5 output path, each time
+frame is evaluated and written immediately, keeping working memory independent
+of the number of output frames. The file contains `position` with shape
 `(time, particle, xyz)` and an explicit `time` dataset, which preserves
 nonuniform stored or requested times. `MaterialTrajectory.open(path)` reopens
 the result lazily.

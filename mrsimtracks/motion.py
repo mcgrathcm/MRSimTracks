@@ -254,8 +254,12 @@ class MeshMotion:
         cloud.point_data["material_cell_id"] = particles.cell_ids
         return cloud
 
-    def trajectory(self, particles, times=None, output_path=None):
-        """Evaluate material positions in memory or stream them to HDF5."""
+    def trajectory(self, particles, times=None, output_path=None, pbar=True):
+        """Evaluate material positions in memory or stream them to HDF5.
+
+        Args:
+            pbar: Show a progress bar over the evaluated frames.
+        """
         stored_frames = times is None
         evaluation_times = (
             self.times_shift_s.copy()
@@ -271,9 +275,15 @@ class MeshMotion:
                 return self._frame_positions(particles, index)
             return self.positions(particles, time)
 
+        frames = tqdm(
+            enumerate(evaluation_times),
+            total=len(evaluation_times),
+            disable=not pbar,
+        )
+
         if output_path is None:
             positions = np.empty(shape, dtype=self.dtype)
-            for index, time in enumerate(evaluation_times):
+            for index, time in frames:
                 positions[index] = evaluate(index, time)
             return MaterialTrajectory(positions, evaluation_times)
 
@@ -292,7 +302,7 @@ class MeshMotion:
             file.create_dataset("time", data=evaluation_times)
             file.attrs["kind"] = "fixed_topology_material_motion"
             file.attrs["periodic"] = self.periodic
-            for index, time in enumerate(evaluation_times):
+            for index, time in frames:
                 dataset[index] = evaluate(index, time)
         return MaterialTrajectory(
             path=output_path,

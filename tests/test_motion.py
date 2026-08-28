@@ -4,6 +4,7 @@ import pyvista as pv
 import pytest
 
 import mrsimtracks as mt
+import mrsimtracks.motion as mt_motion
 
 
 def _tetra(points=None):
@@ -132,6 +133,38 @@ def test_material_trajectory_streams_to_hdf5(tmp_path):
     assert opened.is_file_backed
     np.testing.assert_allclose(opened.times, [0.0, 0.5, 1.0])
     np.testing.assert_allclose(opened.positions, expected.positions)
+
+
+def test_material_trajectory_progress_option(tmp_path, monkeypatch):
+    meshes = []
+    for shift in (0.0, 1.0, 0.0):
+        mesh = _tetra()
+        mesh.point_data["displacement"] = np.tile([shift, 0.0, 0.0], (4, 1))
+        meshes.append(mesh)
+    pvd = _save_series(tmp_path, meshes, times=(0.0, 1.0, 2.0))
+    motion = mt.load_mesh_motion(pvd, displacement_key="displacement")
+    particles = motion.seed(5, rng=np.random.default_rng(9))
+    seen = []
+
+    class RecordingTqdm:
+        def __init__(self, iterable, **kwargs):
+            seen.append(kwargs)
+            self.iterable = iterable
+
+        def __iter__(self):
+            return iter(self.iterable)
+
+    monkeypatch.setattr(mt_motion, "tqdm", RecordingTqdm)
+    motion.trajectory(particles, times=[0.0, 0.5, 1.0], pbar=True)
+    motion.trajectory(
+        particles,
+        times=[0.0, 0.5, 1.0],
+        output_path=tmp_path / "trajectory.h5",
+        pbar=False,
+    )
+
+    assert [call["total"] for call in seen] == [3, 3]
+    assert [call["disable"] for call in seen] == [False, True]
 
 
 def test_coordinate_motion_splits_hex_once_and_reuses_barycentric_weights(tmp_path):
