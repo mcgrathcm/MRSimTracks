@@ -138,6 +138,17 @@ def _center_mesh_data(data):
     return replace(data, coordinates=coordinates), shift
 
 
+def _translate_mesh_data(data, shift):
+    coordinates = tuple(
+        np.ascontiguousarray(
+            np.asarray(points) + shift,
+            dtype=np.asarray(points).dtype,
+        )
+        for points in data.coordinates
+    )
+    return replace(data, coordinates=coordinates)
+
+
 @dataclass(frozen=True)
 class _ArraySpec:
     association: str

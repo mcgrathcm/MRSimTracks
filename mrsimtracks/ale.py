@@ -21,6 +21,8 @@ from .io import (
     _read_vtu_metadata,
     _resolve_point_array,
     _series_source,
+    _center_mesh_frames,
+    _translate_mesh_data,
 )
 from .sampler import _TetSampler, _condition_mesh, resolve_float_dtype
 
@@ -52,6 +54,7 @@ class ALEFlow:
         mesh_velocity_key,
         times_shift_s,
         velocity_scale,
+        origin_shift=None,
     ):
         if data.geometry_mode != "static":
             raise ValueError("ALEFlow requires one static reference mesh")
@@ -60,6 +63,9 @@ class ALEFlow:
         self.displacement_key = displacement_key
         self.mesh_velocity_key = mesh_velocity_key
         self.velocity_scale = float(velocity_scale)
+        self.origin_shift = np.zeros(3) if origin_shift is None else np.asarray(
+            origin_shift, dtype=float
+        )
         self.active_key = velocity_key
         self.dtype = self.velocity(0).dtype
         self.time_interp = "linear"
@@ -415,6 +421,7 @@ def load_ale_flow(
     precision: str = "f64",
     conform_mesh: bool = True,
     velocity_scale: float = 1.0,
+    center_mesh: bool = False,
 ) -> ALEFlow:
     """Load ALE velocity, mesh velocity, and displacement on a static mesh.
 
@@ -436,6 +443,9 @@ def load_ale_flow(
         velocity_scale: Multiplier converting both velocity fields to reference
             mesh spatial units per second. Displacement is not scaled because it
             must already use the same units as the reference coordinates.
+        center_mesh: Translate every absolute ALE mesh frame by the same vector
+            so the initial frame's axis-aligned bounds are centered at the
+            origin. The default is ``False``; fields are unchanged.
 
     Returns:
         ALEFlow: Static reference mesh with time-resolved velocity and
@@ -465,7 +475,15 @@ def load_ale_flow(
             dtype=dtype,
             conform_mesh=conform_mesh,
         )
-    )
+        )
+    origin_shift = np.zeros(3)
+    if center_mesh:
+        initial = (
+            np.asarray(data.coordinates[0])
+            + np.asarray(data.point_fields[displacement_name][0])
+        )
+        _, origin_shift = _center_mesh_frames((initial,))
+        data = _translate_mesh_data(data, origin_shift)
     return ALEFlow(
         data,
         velocity_name,
@@ -473,4 +491,5 @@ def load_ale_flow(
         mesh_velocity_name,
         times_shift_s,
         velocity_scale,
+        origin_shift=origin_shift,
     )

@@ -44,6 +44,12 @@ fallback sampler unless `conform_mesh=True` can condition them to tetrahedra.
 Velocity must be a three-component point-data field with a consistent name
 (matching is case-insensitive).
 
+`load_ale_flow` uses the same reference mesh for all frames and reconstructs
+absolute deformed states as `reference coordinates + displacement`. With
+`center_mesh=True`, the translation is computed from the initial absolute ALE
+state and applied to the reference coordinates before any state samplers are
+constructed. Velocity, displacement, and mesh-velocity fields are unchanged.
+
 ## Fixed-Topology Mesh Motion
 
 `load_mesh_motion` handles material particles attached to a deforming mesh. It

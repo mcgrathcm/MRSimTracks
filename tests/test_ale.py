@@ -121,6 +121,24 @@ def test_load_ale_flow_loads_all_ale_fields_on_one_mesh(tmp_path):
     }
 
 
+def test_load_ale_flow_centers_all_absolute_mesh_states_from_frame_zero(tmp_path):
+    offset = np.array([10.0, -4.0, 2.0])
+    base = _tetra().points + offset
+    first = _tetra(points=base, displacement=0.2)
+    second = _tetra(points=base, displacement=0.5)
+    pvd, _ = _save_series(tmp_path, [first, second], times=(0.0, 1.0))
+
+    flow = mt.load_ale_flow(pvd, center_mesh=True)
+    expected_shift = -(offset + 0.7)
+
+    np.testing.assert_allclose(flow.origin_shift, expected_shift)
+    np.testing.assert_allclose(flow.get_mesh(0.0).points, base + 0.2 + expected_shift)
+    np.testing.assert_allclose(
+        flow.get_mesh(0.5).points, base + 0.35 + expected_shift
+    )
+    np.testing.assert_allclose(flow.get_mesh(0.0).bounds, (-0.5, 0.5) * 3)
+
+
 def test_load_ale_flow_accepts_file_subset_and_dt(tmp_path):
     _, files = _save_series(
         tmp_path,
