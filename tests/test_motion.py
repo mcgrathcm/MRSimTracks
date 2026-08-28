@@ -154,6 +154,58 @@ def test_coordinate_motion_splits_hex_once_and_reuses_barycentric_weights(tmp_pa
     )
 
 
+def test_center_mesh_uses_initial_frame_for_all_motion_frames(tmp_path):
+    offset = np.array([10.0, -4.0, 2.0])
+    translation = np.array([0.2, 0.3, -0.1])
+    base = _tetra().points
+    first = _tetra(base + offset)
+    second = _tetra(base + offset + translation)
+    pvd = _save_series(tmp_path, [first, second], times=(0.0, 1.0))
+
+    motion = mt.load_mesh_motion(pvd, center_mesh=True, periodic=False)
+    expected_shift = -(offset + 0.5)
+
+    np.testing.assert_allclose(motion.origin_shift, expected_shift)
+    np.testing.assert_allclose(motion.node_positions[0], first.points + expected_shift)
+    np.testing.assert_allclose(motion.node_positions[1], second.points + expected_shift)
+    np.testing.assert_allclose(motion.node_positions[0].min(axis=0), -0.5)
+    np.testing.assert_allclose(motion.node_positions[0].max(axis=0), 0.5)
+
+    particles = motion.seed(100, rng=np.random.default_rng(8))
+    initial = motion.positions(particles, 0.0)
+    np.testing.assert_allclose(
+        motion.positions(particles, 0.5), initial + 0.5 * translation
+    )
+
+
+def test_center_mesh_uses_absolute_initial_frame_for_displacement_input(tmp_path):
+    offset = np.array([10.0, -4.0, 2.0])
+    base = _tetra().points + offset
+    displacements = ([0.4, -0.2, 0.1], [0.4, 0.8, 0.1])
+    meshes = []
+    for displacement in displacements:
+        mesh = _tetra(base)
+        mesh.point_data["displacement"] = np.tile(displacement, (4, 1))
+        meshes.append(mesh)
+    pvd = _save_series(tmp_path, meshes, times=(0.0, 1.0))
+
+    motion = mt.load_mesh_motion(
+        pvd, displacement_key="displacement", center_mesh=True, periodic=False
+    )
+    initial_absolute = base + displacements[0]
+    expected_shift = -(
+        initial_absolute.min(axis=0) + initial_absolute.max(axis=0)
+    ) / 2
+
+    np.testing.assert_allclose(motion.origin_shift, expected_shift)
+    np.testing.assert_allclose(
+        motion.node_positions[0], initial_absolute + expected_shift
+    )
+    np.testing.assert_allclose(
+        motion.node_positions[1], base + displacements[1] + expected_shift
+    )
+
+
 def test_single_vtu_supports_time_labeled_displacement_fields(tmp_path):
     mesh = _tetra()
     mesh.point_data["disp_00000"] = np.zeros((4, 3))

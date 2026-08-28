@@ -22,6 +22,7 @@ from .io import (
     _read_vtu,
     _read_vtu_metadata,
     _series_source,
+    _center_mesh_frames,
 )
 from .sampler import _condition_mesh, _tet_volumes, resolve_float_dtype
 
@@ -105,7 +106,7 @@ class MeshMotion:
     """Fixed-topology mesh deformation represented by absolute node positions."""
 
     def __init__(self, times, times_shift_s, topology, node_positions, *,
-                 dtype, periodic, source):
+                 dtype, periodic, source, origin_shift=None):
         self.times = np.asarray(times)
         self.times_shift_s = np.asarray(times_shift_s, dtype=float)
         self.node_positions = tuple(
@@ -114,6 +115,9 @@ class MeshMotion:
         self.dtype = np.dtype(dtype)
         self.periodic = bool(periodic)
         self.source = source
+        self.origin_shift = np.zeros(3) if origin_shift is None else np.asarray(
+            origin_shift, dtype=float
+        )
 
         if len(self.times) < 2:
             raise ValueError("mesh motion requires at least two frames")
@@ -388,6 +392,7 @@ def load_mesh_motion(
     dt: float | None = None,
     precision: str = "f64",
     periodic: bool = True,
+    center_mesh: bool = False,
 ) -> MeshMotion:
     """Load fixed-topology mesh motion from coordinates or nodal displacement.
 
@@ -401,6 +406,9 @@ def load_mesh_motion(
         dt: Optional multiplier for PVD, directory, or file-list time labels.
         precision: Stored node-position precision, ``"f64"`` or ``"f32"``.
         periodic: Wrap evaluation times over the loaded motion duration.
+        center_mesh: Translate every loaded mesh frame by the same vector so
+            the initial frame's axis-aligned bounds are centered at the origin.
+            The default is ``False``. Displacement fields are unchanged.
 
     Returns:
         MeshMotion: Fixed-topology deformation ready for material seeding.
@@ -457,6 +465,10 @@ def load_mesh_motion(
         topology = data.topologies[0]
         source = "displacement"
 
+    origin_shift = np.zeros(3)
+    if center_mesh:
+        node_positions, origin_shift = _center_mesh_frames(node_positions)
+
     return MeshMotion(
         times,
         times_shift_s,
@@ -465,4 +477,5 @@ def load_mesh_motion(
         dtype=dtype,
         periodic=periodic,
         source=source,
+        origin_shift=origin_shift,
     )

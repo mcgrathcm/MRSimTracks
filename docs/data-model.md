@@ -49,7 +49,9 @@ Velocity must be a three-component point-data field with a consistent name
 `load_mesh_motion` handles material particles attached to a deforming mesh. It
 accepts either a series whose VTU point coordinates move or a static-coordinate
 series with a three-component `displacement_key`. Both inputs are normalized at
-load time to absolute node positions for each frame.
+load time to absolute node positions for each frame. Pass `center_mesh=True` to
+translate every absolute frame by the same vector, computed from the initial
+frame's axis-aligned bounds, before seeding or trajectory generation.
 
 The first frame's topology is tetrahedralized once. Existing nodes and their
 motion are preserved exactly; hex and wedge interiors use the resulting
@@ -77,11 +79,13 @@ the result lazily.
 
 ## Ground-Truth Velocity Images
 
-`sample_velocity_image` uses the same unshifted native `(x,y,z)` coordinates as
-`track`. Velocity components remain `(vx,vy,vz)` and no mesh-dependent axis
-permutation is applied by default. `reorder_by_extent=True` optionally applies a
-stable largest-to-smallest permutation to both image axes and vector components,
-without shifting the coordinate origin.
+`sample_velocity_image` uses the same native `(x,y,z)` coordinates as `track`.
+The loaders preserve the source origin by default. With `center_mesh=True`,
+`load_flow` applies one translation computed from the initial mesh frame to all
+stored mesh frames before constructing the sampler; velocity components remain
+`(vx,vy,vz)`. `reorder_by_extent=True` optionally applies a stable
+largest-to-smallest permutation to both image axes and vector components,
+without adding another coordinate shift.
 
 The dense in-memory velocity array has shape `(time,x,y,z,component)`.
 Spatial occupancy records the fraction of regular subvoxel samples inside the

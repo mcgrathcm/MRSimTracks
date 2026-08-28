@@ -7,7 +7,7 @@ import zlib
 
 from collections.abc import Iterable
 from collections import OrderedDict
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import numpy as np
@@ -116,6 +116,26 @@ class MeshFieldSeries:
         lower = np.min([points.min(axis=0) for points in self.coordinates], axis=0)
         upper = np.max([points.max(axis=0) for points in self.coordinates], axis=0)
         return tuple(np.column_stack((lower, upper)).ravel())
+
+
+def _center_mesh_frames(frames):
+    """Translate geometry frames so the first frame's bounds center is zero."""
+    initial = np.asarray(frames[0], dtype=np.float64)
+    center = 0.5 * (initial.min(axis=0) + initial.max(axis=0))
+    shift = -center
+    translated = tuple(
+        np.ascontiguousarray(
+            np.asarray(points) + shift,
+            dtype=np.asarray(points).dtype,
+        )
+        for points in frames
+    )
+    return translated, np.ascontiguousarray(shift)
+
+
+def _center_mesh_data(data):
+    coordinates, shift = _center_mesh_frames(data.coordinates)
+    return replace(data, coordinates=coordinates), shift
 
 
 @dataclass(frozen=True)
@@ -981,10 +1001,14 @@ class _FrameRuntime:
 class Flow:
     """A time-resolved field over static, moving, or changing mesh geometry."""
 
-    def __init__(self, data, active_key, times_shift_s, *, dtype, time_interp):
+    def __init__(self, data, active_key, times_shift_s, *, dtype, time_interp,
+                 origin_shift=None):
         self.data = data
         self.active_key = active_key
         self.dtype = np.dtype(dtype)
+        self.origin_shift = np.zeros(3) if origin_shift is None else np.asarray(
+            origin_shift, dtype=float
+        )
         self.time_interp = resolve_time_interp(time_interp)
         self.times = np.asarray(data.times)
         self.times_shift_s = np.asarray(times_shift_s, dtype=float)
@@ -1168,6 +1192,7 @@ def load_flow(
     time_interp: str = "linear",
     conform_mesh: bool = True,
     mesh_mode: str = "auto",
+    center_mesh: bool = False,
 ) -> Flow:
     """Load a time-resolved flow into one source-independent representation.
 
@@ -1197,6 +1222,9 @@ def load_flow(
             coordinates per frame and checking midpoint topology, or
             ``"changing_topology"`` to load geometry per frame. The aliases
             ``"moving-node"`` and ``"moving_node"`` are accepted.
+        center_mesh: Translate every stored mesh frame by the same vector so
+            the initial frame's axis-aligned bounds are centered at the origin.
+            The default is ``False``; point fields are unchanged.
 
     Returns:
         Flow: Unified flow object used by tracking, reseeding, and imaging.
@@ -1233,10 +1261,14 @@ def load_flow(
             conform_mesh=conform_mesh,
             mesh_mode=mesh_mode,
         )
+    origin_shift = np.zeros(3)
+    if center_mesh:
+        data, origin_shift = _center_mesh_data(data)
     return Flow(
         data,
         key,
         times_shift_s,
         dtype=dtype,
         time_interp=time_interp,
+        origin_shift=origin_shift,
     )

@@ -79,6 +79,26 @@ def test_moving_node_series_shares_topology(tmp_path):
     np.testing.assert_allclose(velocity, 1.5)
 
 
+def test_center_mesh_uses_initial_frame_for_all_flow_frames(tmp_path):
+    offset = np.array([10.0, -4.0, 2.0])
+    translation = np.array([0.2, 0.3, -0.1])
+    base = _tetra().points
+    first = _tetra(base + offset, velocity=1)
+    second = _tetra(base + offset + translation, velocity=2)
+    pvd, _ = _save_series(tmp_path, [first, second])
+
+    flow = mt.load_flow(pvd, mesh_mode="moving", center_mesh=True)
+    expected_shift = -(offset + 0.5)
+
+    np.testing.assert_allclose(flow.origin_shift, expected_shift)
+    np.testing.assert_allclose(flow.data.points(0), first.points + expected_shift)
+    np.testing.assert_allclose(flow.data.points(1), second.points + expected_shift)
+    np.testing.assert_allclose(flow.data.points(0).min(axis=0), -0.5)
+    np.testing.assert_allclose(flow.data.points(0).max(axis=0), 0.5)
+    np.testing.assert_allclose(flow._sampler.node_xyz, flow.data.points(0))
+    np.testing.assert_allclose(flow._frame_vel(1), 2)
+
+
 def test_declared_static_checks_midpoint_node_locations(tmp_path):
     points = _tetra().points.copy()
     moved = points + np.array([0.1, 0.0, 0.0])
