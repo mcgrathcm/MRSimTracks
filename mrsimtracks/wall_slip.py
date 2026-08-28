@@ -29,6 +29,7 @@ import numpy as np
 import pyvista as pv
 from scipy.spatial import cKDTree
 
+from .reseeding import _shift_surface
 from .sampler import _tet_volumes
 
 # local node indices of the face opposite each local vertex of a tet
@@ -73,7 +74,12 @@ class WallSlip:
         flip = np.einsum("ij,ij->i", normal, centroid - node[opp]) < 0
         normal[flip] *= -1.0
 
-        wall = self._wall_mask(node, fnodes, caps)
+        wall = self._wall_mask(
+            node,
+            fnodes,
+            caps,
+            getattr(flow, "origin_shift", np.zeros(3)),
+        )
         if not wall.any():
             raise ValueError("no wall faces found (all boundary faces matched the "
                              "caps); check the cap surfaces")
@@ -88,7 +94,7 @@ class WallSlip:
         self._tree = cKDTree(self._centroid)
 
     @staticmethod
-    def _wall_mask(node, fnodes, caps):
+    def _wall_mask(node, fnodes, caps, origin_shift=None):
         """Boundary faces that are NOT entirely on an open-boundary cap."""
         if not caps:
             return np.ones(fnodes.shape[0], dtype=bool)
@@ -97,6 +103,7 @@ class WallSlip:
         is_cap = np.zeros(node.shape[0], dtype=bool)
         for cap in caps:
             surf = cap if isinstance(cap, pv.DataSet) else pv.read(cap)
+            surf = _shift_surface(surf, origin_shift)
             dist, idx = tree.query(np.asarray(surf.points, dtype=float))
             is_cap[idx[dist <= tol]] = True
         return ~is_cap[fnodes].all(axis=1)                 # wall unless all 3 nodes are cap

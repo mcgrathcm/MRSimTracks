@@ -77,6 +77,26 @@ def test_band_scales_with_fraction(flow):
     assert b.band == pytest.approx(2.0 * a.band)
 
 
+def test_vtp_caps_are_shifted_into_flow_coordinates(tmp_path):
+    mesh = _box_mesh()
+    flow = _FakeFlow(mesh)
+    flow.origin_shift = np.array([10.0, -4.0, 2.0])
+    node = flow._sampler.node_xyz
+    cells, faces = np.where(flow._sampler._adj == -1)
+    face_nodes = np.array([[1, 2, 3], [0, 2, 3], [0, 1, 3], [0, 1, 2]])
+    fnodes = flow._sampler.conn[cells[:, None], face_nodes[faces]]
+    cap = pv.PolyData(
+        node[fnodes[0]] - flow.origin_shift,
+        np.array([3, 0, 1, 2]),
+    )
+    cap_path = tmp_path / "cap.vtp"
+    cap.save(cap_path)
+
+    wall = WallSlip(flow, caps=[cap_path])
+
+    assert wall._centroid.shape[0] < len(fnodes)
+
+
 def test_rejects_non_tet_flow():
     class Bad:
         _sampler = type("S", (), {"ok": False})()

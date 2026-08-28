@@ -322,10 +322,12 @@ def test_ale_reseeding_uses_deformed_area_and_relative_inflow(tmp_path):
         _two_tetra_mesh(stretch=1),
     ]
     pvd, _ = _save_series(tmp_path, meshes)
-    flow = mt.load_ale_flow(pvd)
+    flow = mt.load_ale_flow(pvd, center_mesh=True)
     caps = _two_tetra_caps(meshes[0])
+    caps_path = tmp_path / "caps.vtp"
+    caps.save(caps_path)
     reseeder = mt.ALEBoundaryReseeder(
-        caps,
+        caps_path,
         flow,
         inward_eps=0.01,
         rng=np.random.default_rng(1234),

@@ -99,6 +99,28 @@ def test_center_mesh_uses_initial_frame_for_all_flow_frames(tmp_path):
     np.testing.assert_allclose(flow._frame_vel(1), 2)
 
 
+def test_boundary_reseeder_shifts_vtp_caps_with_centered_flow(tmp_path):
+    offset = np.array([10.0, -4.0, 2.0])
+    base = _tetra().points
+    mesh = _tetra(base + offset)
+    mesh.point_data["velocity"] = np.zeros((4, 3))
+    pvd, _ = _save_series(tmp_path, [mesh, mesh])
+    flow = mt.load_flow(pvd, center_mesh=True)
+
+    cap = pv.PolyData(
+        mesh.points[[1, 2, 3]],
+        np.array([3, 0, 1, 2]),
+    )
+    cap.cell_data["region_id"] = np.array([0], dtype=np.int32)
+    cap_path = tmp_path / "cap.vtp"
+    cap.save(cap_path)
+
+    reseeder = mt.BoundaryReseeder(cap_path, flow, inward_eps=0.01)
+    np.testing.assert_allclose(
+        reseeder._a[0], mesh.points[1] + flow.origin_shift
+    )
+
+
 def test_declared_static_checks_midpoint_node_locations(tmp_path):
     points = _tetra().points.copy()
     moved = points + np.array([0.1, 0.0, 0.0])

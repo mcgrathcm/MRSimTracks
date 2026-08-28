@@ -24,6 +24,10 @@ import mrsimtracks as mt
 reseeder = mt.BoundaryReseeder(caps, flow, dt=dt)
 ```
 
+If the flow was loaded with `center_mesh=True`, cap paths and in-memory cap
+meshes are translated by `flow.origin_shift` during reseeder construction. The
+source cap objects and files are not modified.
+
 This reduces repeated plane-seeding artifacts and helps maintain smoother
 particle density for downstream MR simulation.
 
@@ -52,6 +56,9 @@ max(-(Velocity - Mesh_velocity) . n, 0) * current_area
 reseeder = mt.ALEBoundaryReseeder(caps, flow, dt=dt)
 result = mt.track(flow, seeds=seeds, reseeder=reseeder, dt=dt)
 ```
+
+The same flow-origin translation is applied before ALE cap vertices are matched
+to the centered reference-mesh nodes.
 
 The cap vertices must correspond to reference volume-mesh nodes. When wall
 nodes have zero relative velocity, `mrsimtracks.dev.extract_ale_caps` can build
