@@ -23,6 +23,12 @@ excluded so flux still passes.
 This is a particle-level boundary condition (a modelling choice), not a fix to
 the field; it is the targeted, minimally-invasive way to suppress the wall
 deposition without re-meshing.
+
+With ``cmm_mesh_motion``, wall distance and normals are evaluated on the
+deformed wall, and the correction is applied to velocity relative to the moving
+wall:
+
+    v* = v - max((v - v_wall) . n_out, 0) n_out
 """
 
 import numpy as np
@@ -46,19 +52,30 @@ class WallSlip:
             ``None``, every domain-boundary face is treated as a wall.
         band_frac (float): Band thickness as a fraction of the vessel hydraulic
             diameter ``D_h = 4 V / A_wall``. Default ``0.02`` (2%).
+        cmm_mesh_motion (CMMMeshMotion | None): Optional moving-wall geometry
+            and wall velocity.
 
     Attributes:
         d_hydraulic (float): Estimated vessel diameter.
         band (float): Absolute band thickness used (``band_frac * d_hydraulic``).
     """
 
-    def __init__(self, flow, caps=None, band_frac=0.02):
+    def __init__(self, flow, caps=None, band_frac=0.02, cmm_mesh_motion=None):
         sampler = getattr(flow, "_sampler", None)
         if sampler is None or not getattr(sampler, "ok", False):
             raise ValueError("WallSlip requires an all-tetrahedral flow mesh "
                              "(load with conform_mesh=True)")
         node = np.asarray(sampler.node_xyz, dtype=np.float64)
         conn = sampler.conn
+
+        if cmm_mesh_motion is not None and cmm_mesh_motion._D.shape[1] != node.shape[0]:
+            raise ValueError(
+                f"cmm_mesh_motion was built from a different mesh "
+                f"({cmm_mesh_motion._D.shape[1]} "
+                f"nodes vs. {node.shape[0]} here) -- WallSlip and CMMMeshMotion must "
+                "share the same flow")
+        self.cmm_mesh_motion = cmm_mesh_motion
+        self._flow = flow
 
         cells, faces = np.where(sampler._adj == -1)        # boundary faces
         fnodes = conn[cells[:, None], _FACE[faces]]        # (nb, 3) face node ids
@@ -87,6 +104,32 @@ class WallSlip:
         self._normal = np.ascontiguousarray(normal[wall])
         self._tree = cKDTree(self._centroid)
 
+        self._node_ref = node
+        self._fnodes = np.ascontiguousarray(fnodes[wall])
+        self._opp = np.ascontiguousarray(opp[wall])
+
+    def _deformed_geometry(self, t):
+        """Wall face geometry and velocity at time ``t``."""
+        i0, i1, s = self.cmm_mesh_motion._weights(t)
+        D_t = ((1.0 - s) * self.cmm_mesh_motion._D[i0]
+               + s * self.cmm_mesh_motion._D[i1])
+
+        p = self._node_ref[self._fnodes] + D_t[self._fnodes]   # (nb,3,3)
+        centroid = p.mean(axis=1)
+        cross = np.cross(p[:, 1] - p[:, 0], p[:, 2] - p[:, 0])
+        area = 0.5 * np.linalg.norm(cross, axis=1)
+        normal = cross / (2.0 * np.maximum(area, 1e-30)[:, None])
+
+        opp_pos = self._node_ref[self._opp] + D_t[self._opp]
+        flip = np.einsum("ij,ij->i", normal, centroid - opp_pos) < 0
+        normal[flip] *= -1.0
+
+        v_t = ((1.0 - s) * np.asarray(self._flow._frame_vel(i0), np.float64)
+               + s * np.asarray(self._flow._frame_vel(i1), np.float64))
+        v_wall = v_t[self._fnodes].mean(axis=1)                # (nb,3)
+
+        return centroid, normal, cKDTree(centroid), v_wall
+
     @staticmethod
     def _wall_mask(node, fnodes, caps):
         """Boundary faces that are NOT entirely on an open-boundary cap."""
@@ -97,20 +140,31 @@ class WallSlip:
         is_cap = np.zeros(node.shape[0], dtype=bool)
         for cap in caps:
             surf = cap if isinstance(cap, pv.DataSet) else pv.read(cap)
-            dist, idx = tree.query(np.asarray(surf.points, dtype=float))
+            dist, idx = tree.query(np.asarray(surf.points, dtype=float), workers=-1)
             is_cap[idx[dist <= tol]] = True
         return ~is_cap[fnodes].all(axis=1)                 # wall unless all 3 nodes are cap
 
-    def apply(self, positions, velocity):
+    def apply(self, positions, velocity, t=None):
         """Remove the into-wall velocity for particles within the wall band.
 
         ``velocity`` is modified in place and returned. ``positions`` is the
         current particle position used to find the nearest wall face.
         """
-        dist, face = self._tree.query(positions)
+        if self.cmm_mesh_motion is not None:
+            if t is None:
+                raise ValueError("apply() needs `t` when WallSlip was built with "
+                                 "cmm_mesh_motion")
+            centroid, normal, tree, v_wall = self._deformed_geometry(t)
+        else:
+            centroid, normal, tree, v_wall = self._centroid, self._normal, self._tree, None
+
+        dist, face = tree.query(positions, workers=-1)
         within = dist < self.band
         if within.any():
-            n = self._normal[face[within]]
-            vn = np.einsum("ij,ij->i", velocity[within], n)
+            n = normal[face[within]]
+            v_rel = velocity[within]
+            if v_wall is not None:
+                v_rel = v_rel - v_wall[face[within]]
+            vn = np.einsum("ij,ij->i", v_rel, n)
             velocity[within] -= np.maximum(vn, 0.0)[:, None] * n
         return velocity

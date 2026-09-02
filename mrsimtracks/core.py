@@ -334,7 +334,7 @@ def _track_particles(flow_mesh, initial_seeds: pv.PolyData, reset_points: np.nda
         # Near-wall no-penetration: strip the into-wall velocity so particles
         # slide along walls instead of being deposited and trapped at v~0.
         if wall_slip is not None:
-            v = wall_slip.apply(r, v)
+            v = wall_slip.apply(r, v, t=i*dt)
 
         # Advect
         r = r + v*dt

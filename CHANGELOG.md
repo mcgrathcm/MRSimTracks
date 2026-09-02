@@ -11,6 +11,10 @@ This project uses semantic versioning while the public API stabilizes.
   linear temporal averaging, regular subvoxel averaging, occupancy maps, and
   sparse spatial HDF5 storage. Optional extent-based reordering applies the same
   largest-to-smallest permutation to image axes and velocity components.
+- Add `load_cmm_flow`/`CMMMeshMotion` for CMM (fixed-mesh FSI) results. It
+  reconstructs time-resolved mesh displacement from wall-node velocity and
+  remaps physical particle positions to the fixed reference mesh before
+  sampling.
 
 ## [0.2.1] - 2026-08-18
 

@@ -11,7 +11,7 @@ def _track_particle_batch(path, seeds, inlet, dt, tmax, method="RK4",
                           subsamp=1, rng_seed=None, collect_metrics=False,
                           precision="f64", time_interp="linear", conform_mesh=True,
                           mesh_mode="auto", wall_slip=False,
-                          wall_slip_band=0.02):
+                          wall_slip_band=0.02, cmm=None):
     # Tracking only ever reads active_key, so skip pressure (etc.) by default to
     # speed up the per-worker reload and cut memory.
     flow = load_flow(
@@ -35,11 +35,21 @@ def _track_particle_batch(path, seeds, inlet, dt, tmax, method="RK4",
         # dt enables the volumetric inflow layer (avoids density striping).
         reseeder = BoundaryReseeder(caps, flow, dt=dt)
 
+    mesh_motion = None
+    if cmm is not None:
+        from .cmm import CMMFlow, CMMMeshMotion
+        cap_list = caps if caps is None or isinstance(caps, (list, tuple)) else [caps]
+        mesh_motion = CMMMeshMotion(flow, exterior=cmm["exterior"],
+                                    walls=cmm["walls"], caps=cap_list,
+                                    verbose=pbar, cache_path=cmm.get("cache_path"))
+        flow = CMMFlow(flow, mesh_motion)
+
     # Near-wall slip projection, also built per worker from this worker's flow.
     slip = None
     if wall_slip:
         from .wall_slip import WallSlip
-        slip = WallSlip(flow, caps=caps, band_frac=wall_slip_band)
+        slip = WallSlip(flow, caps=caps, band_frac=wall_slip_band,
+                        cmm_mesh_motion=mesh_motion)
 
     rng = None if rng_seed is None else np.random.default_rng(rng_seed)
     metrics = {} if collect_metrics else None
@@ -63,7 +73,7 @@ def track_parallel(path, seeds, dt=1e-3, tmax=None, caps=None, inlet=None,
                    only_active_key=True, pbar=True, rng=None,
                    return_metrics=False, precision="f64", time_interp="linear",
                    conform_mesh=True, mesh_mode="auto", wall_slip=False,
-                   wall_slip_band=0.02):
+                   wall_slip_band=0.02, cmm=None):
     """Track particles in parallel, with each worker reloading the flow field.
 
     Args:
@@ -98,6 +108,9 @@ def track_parallel(path, seeds, dt=1e-3, tmax=None, caps=None, inlet=None,
             worker from ``caps``). Default ``False``.
         wall_slip_band (float): Slip band as a fraction of vessel diameter when
             ``wall_slip`` is enabled. Default ``0.02``.
+        cmm (dict | None): Moving-wall (CMM) surfaces
+            ``{"exterior": ..., "walls": ...}``; caps are reused from
+            ``caps``. An optional ``cache_path`` avoids repeated worker solves.
 
     Returns:
         (Union[TrackingResult, tuple]): ``TrackingResult`` by
@@ -112,11 +125,28 @@ def track_parallel(path, seeds, dt=1e-3, tmax=None, caps=None, inlet=None,
     if n_workers < 1:
         raise ValueError("n_workers must be >= 1")
 
+    need_flow = tmax is None or cmm is not None
+    flow = (load_flow(path, active_key=active_key, subsamp=subsamp,
+                      only_active_key=only_active_key, precision=precision,
+                      time_interp=time_interp, conform_mesh=conform_mesh,
+                      mesh_mode=mesh_mode)
+            if need_flow else None)
     if tmax is None:
-        flow = load_flow(path, active_key=active_key, subsamp=subsamp,
-                         only_active_key=only_active_key, mesh_mode=mesh_mode)
         tmax = flow.tmax
-        del flow
+
+    if cmm is not None:
+        from .cmm import CMMMeshMotion
+        cache_path = cmm.get("cache_path")
+        if cache_path is None:
+            cache_path = f"{cmm['exterior']}.cmm_cache.npz"
+        cap_list = caps if caps is None or isinstance(caps, (list, tuple)) else [caps]
+        mesh_motion = CMMMeshMotion(flow, exterior=cmm["exterior"],
+                                    walls=cmm["walls"], caps=cap_list,
+                                    verbose=pbar, cache_path=cache_path)
+        del mesh_motion
+        cmm = {**cmm, "cache_path": cache_path}
+
+    del flow
 
     rng = rng if rng is not None else np.random.default_rng()
     seeds = np.asarray(seeds, float)
@@ -135,7 +165,8 @@ def track_parallel(path, seeds, dt=1e-3, tmax=None, caps=None, inlet=None,
             collect_metrics=return_metrics, precision=precision,
             time_interp=time_interp, conform_mesh=conform_mesh,
             mesh_mode=mesh_mode,
-            wall_slip=wall_slip, wall_slip_band=wall_slip_band)
+            wall_slip=wall_slip, wall_slip_band=wall_slip_band,
+            cmm=cmm)
         for i, batch in enumerate(batches)
     )
 

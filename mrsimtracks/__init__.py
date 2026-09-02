@@ -13,6 +13,7 @@ Typical use:
 
 from .ale import ALEFlow, load_ale_flow
 from .core import TrackingResult, track
+from .cmm import CMMFlow, CMMMeshMotion, load_cmm_flow
 from .imaging import VelocityImage, sample_velocity_image
 from .io import load_flow
 from .mapping import periodic_mapping
@@ -24,6 +25,7 @@ from .wall_slip import WallSlip
 __all__ = [
     "load_flow",
     "load_ale_flow",
+    "load_cmm_flow",
     "load_mesh_motion",
     "periodic_mapping",
     "sample_velocity_image",
@@ -38,4 +40,6 @@ __all__ = [
     "BoundaryReseeder",
     "ALEBoundaryReseeder",
     "WallSlip",
+    "CMMFlow",
+    "CMMMeshMotion",
 ]
