@@ -44,11 +44,18 @@ fallback sampler unless `conform_mesh=True` can condition them to tetrahedra.
 Velocity must be a three-component point-data field with a consistent name
 (matching is case-insensitive).
 
+Pass `reverse_velocity=True` to `load_flow` to negate `(vx, vy, vz)` before the
+field is sampled, tracked, used for reseeding, or exported as a velocity image.
+The source files are not modified. `track_parallel` accepts the same option and
+applies it in every worker.
+
 `load_ale_flow` uses the same reference mesh for all frames and reconstructs
 absolute deformed states as `reference coordinates + displacement`. With
 `center_mesh=True`, the translation is computed from the initial absolute ALE
 state and applied to the reference coordinates before any state samplers are
 constructed. Velocity, displacement, and mesh-velocity fields are unchanged.
+With `reverse_velocity=True`, only the physical velocity field is negated;
+displacement and mesh velocity remain unchanged.
 
 ## Fixed-Topology Mesh Motion
 

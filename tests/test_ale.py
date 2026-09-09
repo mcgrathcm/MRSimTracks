@@ -229,6 +229,22 @@ def test_load_ale_flow_scales_both_velocity_fields(tmp_path):
     assert flow.velocity_scale == 100
 
 
+def test_load_ale_flow_reverses_only_physical_velocity(tmp_path):
+    pvd, _ = _save_series(
+        tmp_path,
+        [
+            _tetra(velocity=1.0, mesh_velocity=0.25),
+            _tetra(velocity=2.0, mesh_velocity=0.5),
+        ],
+    )
+
+    flow = mt.load_ale_flow(pvd, reverse_velocity=True)
+
+    np.testing.assert_allclose(flow.velocity(0), -1)
+    np.testing.assert_allclose(flow.mesh_velocity(0), 0.25)
+    np.testing.assert_allclose(flow.relative_velocity(0), -1.25)
+
+
 def test_ale_relative_sampling_uses_velocity_minus_mesh_velocity(tmp_path):
     pvd, _ = _save_series(
         tmp_path,

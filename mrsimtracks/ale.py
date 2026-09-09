@@ -22,6 +22,7 @@ from .io import (
     _resolve_point_array,
     _series_source,
     _center_mesh_frames,
+    _reverse_velocity_field,
     _translate_mesh_data,
 )
 from .sampler import _TetSampler, _condition_mesh, resolve_float_dtype
@@ -422,6 +423,7 @@ def load_ale_flow(
     conform_mesh: bool = True,
     velocity_scale: float = 1.0,
     center_mesh: bool = False,
+    reverse_velocity: bool = False,
 ) -> ALEFlow:
     """Load ALE velocity, mesh velocity, and displacement on a static mesh.
 
@@ -446,6 +448,9 @@ def load_ale_flow(
         center_mesh: Translate every absolute ALE mesh frame by the same vector
             so the initial frame's axis-aligned bounds are centered at the
             origin. The default is ``False``; fields are unchanged.
+        reverse_velocity: Negate the physical velocity field before sampling or
+            tracking. Displacement and mesh velocity are unchanged. The default
+            is ``False``.
 
     Returns:
         ALEFlow: Static reference mesh with time-resolved velocity and
@@ -484,6 +489,8 @@ def load_ale_flow(
         )
         _, origin_shift = _center_mesh_frames((initial,))
         data = _translate_mesh_data(data, origin_shift)
+    if reverse_velocity:
+        _reverse_velocity_field(data, velocity_name)
     return ALEFlow(
         data,
         velocity_name,

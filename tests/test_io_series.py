@@ -99,6 +99,18 @@ def test_center_mesh_uses_initial_frame_for_all_flow_frames(tmp_path):
     np.testing.assert_allclose(flow._frame_vel(1), 2)
 
 
+def test_reverse_velocity_negates_every_flow_frame(tmp_path):
+    pvd, _ = _save_series(tmp_path, [_tetra(velocity=1), _tetra(velocity=2)])
+
+    flow = mt.load_flow(pvd, reverse_velocity=True)
+
+    np.testing.assert_allclose(flow._frame_vel(0), -1)
+    np.testing.assert_allclose(flow._frame_vel(1), -2)
+    velocity, valid, _ = flow.sample_v([[0.1, 0.1, 0.1]], 0.5)
+    assert valid.tolist() == [True]
+    np.testing.assert_allclose(velocity, -1.5)
+
+
 def test_boundary_reseeder_shifts_vtp_caps_with_centered_flow(tmp_path):
     offset = np.array([10.0, -4.0, 2.0])
     base = _tetra().points

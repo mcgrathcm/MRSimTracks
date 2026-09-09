@@ -11,7 +11,8 @@ def _track_particle_batch(path, seeds, inlet, dt, tmax, method="RK4",
                           subsamp=1, rng_seed=None, collect_metrics=False,
                           precision="f64", time_interp="linear", conform_mesh=True,
                           mesh_mode="auto", wall_slip=False,
-                          wall_slip_band=0.02, center_mesh=False):
+                          wall_slip_band=0.02, center_mesh=False,
+                          reverse_velocity=False):
     # Tracking only ever reads active_key, so skip pressure (etc.) by default to
     # speed up the per-worker reload and cut memory.
     flow = load_flow(
@@ -26,6 +27,7 @@ def _track_particle_batch(path, seeds, inlet, dt, tmax, method="RK4",
         conform_mesh=conform_mesh,
         mesh_mode=mesh_mode,
         center_mesh=center_mesh,
+        reverse_velocity=reverse_velocity,
     )
 
     # `caps` (path or labeled surface) enables backflow-aware inflow reseeding.
@@ -64,7 +66,8 @@ def track_parallel(path, seeds, dt=1e-3, tmax=None, caps=None, inlet=None,
                    only_active_key=True, pbar=True, rng=None,
                    return_metrics=False, precision="f64", time_interp="linear",
                    conform_mesh=True, mesh_mode="auto", wall_slip=False,
-                   wall_slip_band=0.02, center_mesh=False):
+                   wall_slip_band=0.02, center_mesh=False,
+                   reverse_velocity=False):
     """Track particles in parallel, with each worker reloading the flow field.
 
     Args:
@@ -97,6 +100,8 @@ def track_parallel(path, seeds, dt=1e-3, tmax=None, caps=None, inlet=None,
             Default ``"auto"``.
         center_mesh (bool): Apply the frame-0-based centering translation to
             every worker's loaded mesh. Default ``False``.
+        reverse_velocity (bool): Negate all three velocity components in every
+            worker before tracking. Default ``False``.
         wall_slip (bool): Apply the near-wall no-penetration projection (built per
             worker from ``caps``). Default ``False``.
         wall_slip_band (float): Slip band as a fraction of vessel diameter when
@@ -118,7 +123,8 @@ def track_parallel(path, seeds, dt=1e-3, tmax=None, caps=None, inlet=None,
     if tmax is None:
         flow = load_flow(path, active_key=active_key, subsamp=subsamp,
                          only_active_key=only_active_key, mesh_mode=mesh_mode,
-                         center_mesh=center_mesh)
+                         center_mesh=center_mesh,
+                         reverse_velocity=reverse_velocity)
         tmax = flow.tmax
         del flow
 
@@ -140,7 +146,7 @@ def track_parallel(path, seeds, dt=1e-3, tmax=None, caps=None, inlet=None,
             time_interp=time_interp, conform_mesh=conform_mesh,
             mesh_mode=mesh_mode,
             wall_slip=wall_slip, wall_slip_band=wall_slip_band,
-            center_mesh=center_mesh)
+            center_mesh=center_mesh, reverse_velocity=reverse_velocity)
         for i, batch in enumerate(batches)
     )
 

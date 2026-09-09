@@ -149,6 +149,11 @@ def _translate_mesh_data(data, shift):
     return replace(data, coordinates=coordinates)
 
 
+def _reverse_velocity_field(data, key):
+    for velocity in data.point_fields[key]:
+        np.negative(velocity, out=velocity)
+
+
 @dataclass(frozen=True)
 class _ArraySpec:
     association: str
@@ -1204,6 +1209,7 @@ def load_flow(
     conform_mesh: bool = True,
     mesh_mode: str = "auto",
     center_mesh: bool = False,
+    reverse_velocity: bool = False,
 ) -> Flow:
     """Load a time-resolved flow into one source-independent representation.
 
@@ -1236,6 +1242,8 @@ def load_flow(
         center_mesh: Translate every stored mesh frame by the same vector so
             the initial frame's axis-aligned bounds are centered at the origin.
             The default is ``False``; point fields are unchanged.
+        reverse_velocity: Negate all three velocity components before sampling
+            or tracking. The default is ``False``.
 
     Returns:
         Flow: Unified flow object used by tracking, reseeding, and imaging.
@@ -1275,6 +1283,8 @@ def load_flow(
     origin_shift = np.zeros(3)
     if center_mesh:
         data, origin_shift = _center_mesh_data(data)
+    if reverse_velocity:
+        _reverse_velocity_field(data, key)
     return Flow(
         data,
         key,
