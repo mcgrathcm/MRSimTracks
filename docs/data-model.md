@@ -44,12 +44,27 @@ fallback sampler unless `conform_mesh=True` can condition them to tetrahedra.
 Velocity must be a three-component point-data field with a consistent name
 (matching is case-insensitive).
 
+Pass `reverse_velocity=True` to `load_flow` to negate `(vx, vy, vz)` before the
+field is sampled, tracked, used for reseeding, or exported as a velocity image.
+The source files are not modified. `track_parallel` accepts the same option and
+applies it in every worker.
+
+`load_ale_flow` uses the same reference mesh for all frames and reconstructs
+absolute deformed states as `reference coordinates + displacement`. With
+`center_mesh=True`, the translation is computed from the initial absolute ALE
+state and applied to the reference coordinates before any state samplers are
+constructed. Velocity, displacement, and mesh-velocity fields are unchanged.
+With `reverse_velocity=True`, only the physical velocity field is negated;
+displacement and mesh velocity remain unchanged.
+
 ## Fixed-Topology Mesh Motion
 
 `load_mesh_motion` handles material particles attached to a deforming mesh. It
 accepts either a series whose VTU point coordinates move or a static-coordinate
 series with a three-component `displacement_key`. Both inputs are normalized at
-load time to absolute node positions for each frame.
+load time to absolute node positions for each frame. Pass `center_mesh=True` to
+translate every absolute frame by the same vector, computed from the initial
+frame's axis-aligned bounds, before seeding or trajectory generation.
 
 The first frame's topology is tetrahedralized once. Existing nodes and their
 motion are preserved exactly; hex and wedge interiors use the resulting
@@ -67,21 +82,24 @@ time interval. The coordinate-series loader compares midpoint topology to the
 reference frame; mesh conditioning and periodic closure remain input-data
 responsibilities.
 
-`MeshMotion.trajectory` returns a `MaterialTrajectory`. Without `output_path`,
-positions are held in memory. With an HDF5 output path, each time frame is
-evaluated and written immediately, keeping working memory independent of the
-number of output frames. The file contains `position` with shape
+`MeshMotion.trajectory` returns a `MaterialTrajectory`. It shows a progress bar
+over evaluated frames by default; pass `pbar=False` for quiet execution. Without
+`output_path`, positions are held in memory. With an HDF5 output path, each time
+frame is evaluated and written immediately, keeping working memory independent
+of the number of output frames. The file contains `position` with shape
 `(time, particle, xyz)` and an explicit `time` dataset, which preserves
 nonuniform stored or requested times. `MaterialTrajectory.open(path)` reopens
 the result lazily.
 
 ## Ground-Truth Velocity Images
 
-`sample_velocity_image` uses the same unshifted native `(x,y,z)` coordinates as
-`track`. Velocity components remain `(vx,vy,vz)` and no mesh-dependent axis
-permutation is applied by default. `reorder_by_extent=True` optionally applies a
-stable largest-to-smallest permutation to both image axes and vector components,
-without shifting the coordinate origin.
+`sample_velocity_image` uses the same native `(x,y,z)` coordinates as `track`.
+The loaders preserve the source origin by default. With `center_mesh=True`,
+`load_flow` applies one translation computed from the initial mesh frame to all
+stored mesh frames before constructing the sampler; velocity components remain
+`(vx,vy,vz)`. `reorder_by_extent=True` optionally applies a stable
+largest-to-smallest permutation to both image axes and vector components,
+without adding another coordinate shift.
 
 The dense in-memory velocity array has shape `(time,x,y,z,component)`.
 Spatial occupancy records the fraction of regular subvoxel samples inside the

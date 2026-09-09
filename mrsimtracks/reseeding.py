@@ -47,6 +47,20 @@ def _frame_velocity(flow, k):
     return np.asarray(flow._frame_vel(k))
 
 
+def _shift_surface(surface, origin_shift):
+    """Return a copy of a cap surface translated into flow coordinates."""
+    if origin_shift is None:
+        return surface
+    origin_shift = np.asarray(origin_shift, dtype=float)
+    if not np.any(origin_shift):
+        return surface
+    shifted = surface.copy(deep=True)
+    shifted.points = np.ascontiguousarray(
+        np.asarray(surface.points, dtype=float) + origin_shift
+    )
+    return shifted
+
+
 class BoundaryReseeder:
     """Flux-weighted boundary reseeder for particles that leave the domain.
 
@@ -124,6 +138,9 @@ class BoundaryReseeder:
                 blocks.append(s)
             caps = blocks[0].merge(blocks[1:]) if len(blocks) > 1 else blocks[0]
         caps = caps.extract_surface(algorithm="dataset_surface").triangulate()
+        caps = _shift_surface(
+            caps, getattr(self.flow, "origin_shift", np.zeros(3))
+        )
         if self.region_key not in caps.cell_data:
             caps.cell_data[self.region_key] = np.zeros(caps.n_cells, np.int32)
         return caps

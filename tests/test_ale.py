@@ -121,6 +121,24 @@ def test_load_ale_flow_loads_all_ale_fields_on_one_mesh(tmp_path):
     }
 
 
+def test_load_ale_flow_centers_all_absolute_mesh_states_from_frame_zero(tmp_path):
+    offset = np.array([10.0, -4.0, 2.0])
+    base = _tetra().points + offset
+    first = _tetra(points=base, displacement=0.2)
+    second = _tetra(points=base, displacement=0.5)
+    pvd, _ = _save_series(tmp_path, [first, second], times=(0.0, 1.0))
+
+    flow = mt.load_ale_flow(pvd, center_mesh=True)
+    expected_shift = -(offset + 0.7)
+
+    np.testing.assert_allclose(flow.origin_shift, expected_shift)
+    np.testing.assert_allclose(flow.get_mesh(0.0).points, base + 0.2 + expected_shift)
+    np.testing.assert_allclose(
+        flow.get_mesh(0.5).points, base + 0.35 + expected_shift
+    )
+    np.testing.assert_allclose(flow.get_mesh(0.0).bounds, (-0.5, 0.5) * 3)
+
+
 def test_load_ale_flow_accepts_file_subset_and_dt(tmp_path):
     _, files = _save_series(
         tmp_path,
@@ -209,6 +227,22 @@ def test_load_ale_flow_scales_both_velocity_fields(tmp_path):
     np.testing.assert_allclose(flow.mesh_velocity(0), 25)
     np.testing.assert_allclose(flow.relative_velocity(0), 75)
     assert flow.velocity_scale == 100
+
+
+def test_load_ale_flow_reverses_only_physical_velocity(tmp_path):
+    pvd, _ = _save_series(
+        tmp_path,
+        [
+            _tetra(velocity=1.0, mesh_velocity=0.25),
+            _tetra(velocity=2.0, mesh_velocity=0.5),
+        ],
+    )
+
+    flow = mt.load_ale_flow(pvd, reverse_velocity=True)
+
+    np.testing.assert_allclose(flow.velocity(0), -1)
+    np.testing.assert_allclose(flow.mesh_velocity(0), 0.25)
+    np.testing.assert_allclose(flow.relative_velocity(0), -1.25)
 
 
 def test_ale_relative_sampling_uses_velocity_minus_mesh_velocity(tmp_path):
@@ -304,10 +338,12 @@ def test_ale_reseeding_uses_deformed_area_and_relative_inflow(tmp_path):
         _two_tetra_mesh(stretch=1),
     ]
     pvd, _ = _save_series(tmp_path, meshes)
-    flow = mt.load_ale_flow(pvd)
+    flow = mt.load_ale_flow(pvd, center_mesh=True)
     caps = _two_tetra_caps(meshes[0])
+    caps_path = tmp_path / "caps.vtp"
+    caps.save(caps_path)
     reseeder = mt.ALEBoundaryReseeder(
-        caps,
+        caps_path,
         flow,
         inward_eps=0.01,
         rng=np.random.default_rng(1234),

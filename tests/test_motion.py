@@ -4,6 +4,7 @@ import pyvista as pv
 import pytest
 
 import mrsimtracks as mt
+import mrsimtracks.motion as mt_motion
 
 
 def _tetra(points=None):
@@ -134,6 +135,38 @@ def test_material_trajectory_streams_to_hdf5(tmp_path):
     np.testing.assert_allclose(opened.positions, expected.positions)
 
 
+def test_material_trajectory_progress_option(tmp_path, monkeypatch):
+    meshes = []
+    for shift in (0.0, 1.0, 0.0):
+        mesh = _tetra()
+        mesh.point_data["displacement"] = np.tile([shift, 0.0, 0.0], (4, 1))
+        meshes.append(mesh)
+    pvd = _save_series(tmp_path, meshes, times=(0.0, 1.0, 2.0))
+    motion = mt.load_mesh_motion(pvd, displacement_key="displacement")
+    particles = motion.seed(5, rng=np.random.default_rng(9))
+    seen = []
+
+    class RecordingTqdm:
+        def __init__(self, iterable, **kwargs):
+            seen.append(kwargs)
+            self.iterable = iterable
+
+        def __iter__(self):
+            return iter(self.iterable)
+
+    monkeypatch.setattr(mt_motion, "tqdm", RecordingTqdm)
+    motion.trajectory(particles, times=[0.0, 0.5, 1.0], pbar=True)
+    motion.trajectory(
+        particles,
+        times=[0.0, 0.5, 1.0],
+        output_path=tmp_path / "trajectory.h5",
+        pbar=False,
+    )
+
+    assert [call["total"] for call in seen] == [3, 3]
+    assert [call["disable"] for call in seen] == [False, True]
+
+
 def test_coordinate_motion_splits_hex_once_and_reuses_barycentric_weights(tmp_path):
     translation = np.array([0.2, -0.1, 0.3])
     first = _hexa()
@@ -151,6 +184,58 @@ def test_coordinate_motion_splits_hex_once_and_reuses_barycentric_weights(tmp_pa
     assert np.all((initial >= 0.0) & (initial <= 1.0))
     np.testing.assert_allclose(
         motion.positions(particles, 0.5), initial + 0.5 * translation
+    )
+
+
+def test_center_mesh_uses_initial_frame_for_all_motion_frames(tmp_path):
+    offset = np.array([10.0, -4.0, 2.0])
+    translation = np.array([0.2, 0.3, -0.1])
+    base = _tetra().points
+    first = _tetra(base + offset)
+    second = _tetra(base + offset + translation)
+    pvd = _save_series(tmp_path, [first, second], times=(0.0, 1.0))
+
+    motion = mt.load_mesh_motion(pvd, center_mesh=True, periodic=False)
+    expected_shift = -(offset + 0.5)
+
+    np.testing.assert_allclose(motion.origin_shift, expected_shift)
+    np.testing.assert_allclose(motion.node_positions[0], first.points + expected_shift)
+    np.testing.assert_allclose(motion.node_positions[1], second.points + expected_shift)
+    np.testing.assert_allclose(motion.node_positions[0].min(axis=0), -0.5)
+    np.testing.assert_allclose(motion.node_positions[0].max(axis=0), 0.5)
+
+    particles = motion.seed(100, rng=np.random.default_rng(8))
+    initial = motion.positions(particles, 0.0)
+    np.testing.assert_allclose(
+        motion.positions(particles, 0.5), initial + 0.5 * translation
+    )
+
+
+def test_center_mesh_uses_absolute_initial_frame_for_displacement_input(tmp_path):
+    offset = np.array([10.0, -4.0, 2.0])
+    base = _tetra().points + offset
+    displacements = ([0.4, -0.2, 0.1], [0.4, 0.8, 0.1])
+    meshes = []
+    for displacement in displacements:
+        mesh = _tetra(base)
+        mesh.point_data["displacement"] = np.tile(displacement, (4, 1))
+        meshes.append(mesh)
+    pvd = _save_series(tmp_path, meshes, times=(0.0, 1.0))
+
+    motion = mt.load_mesh_motion(
+        pvd, displacement_key="displacement", center_mesh=True, periodic=False
+    )
+    initial_absolute = base + displacements[0]
+    expected_shift = -(
+        initial_absolute.min(axis=0) + initial_absolute.max(axis=0)
+    ) / 2
+
+    np.testing.assert_allclose(motion.origin_shift, expected_shift)
+    np.testing.assert_allclose(
+        motion.node_positions[0], initial_absolute + expected_shift
+    )
+    np.testing.assert_allclose(
+        motion.node_positions[1], base + displacements[1] + expected_shift
     )
 
 

@@ -81,6 +81,41 @@ def test_track_parallel_is_deterministic_with_seeded_rng(seeds, inlet):
     np.testing.assert_array_equal(a.reset, b.reset)
 
 
+def test_track_parallel_reverses_velocity_in_every_worker(seeds, inlet):
+    flow = pt.load_flow(
+        SMALL_FLOW, active_key=ACTIVE_KEY, pbar=False, reverse_velocity=True
+    )
+    serial = pt.track(
+        flow,
+        seeds=seeds,
+        dt=DT,
+        tmax=TMAX,
+        inlet=inlet,
+        pbar=False,
+        rng=np.random.default_rng(0),
+    )
+    parallel = pt.track_parallel(
+        str(SMALL_FLOW),
+        seeds,
+        dt=DT,
+        tmax=TMAX,
+        inlet=inlet,
+        n_workers=2,
+        active_key=ACTIVE_KEY,
+        pbar=False,
+        rng=np.random.default_rng(0),
+        reverse_velocity=True,
+    )
+
+    assert serial.reset.sum() == 0
+    assert parallel.reset.sum() == 0
+    np.testing.assert_allclose(
+        _sorted_rows(np.asarray(parallel.positions[-1])),
+        _sorted_rows(np.asarray(serial.positions[-1])),
+        atol=1e-10,
+    )
+
+
 def test_track_parallel_aggregates_worker_metrics(parallel_result):
     _, metrics = parallel_result
     assert metrics["n_workers"] == 3
