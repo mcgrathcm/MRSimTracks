@@ -55,7 +55,8 @@ class WallSlip:
 
     def __init__(self, flow, caps=None, band_frac=0.02):
         sampler = getattr(flow, "_sampler", None)
-        if sampler is None or not getattr(sampler, "ok", False):
+        if (sampler is None or not getattr(sampler, "ok", False)
+                or not hasattr(sampler, "conn")):
             raise ValueError("WallSlip requires an all-tetrahedral flow mesh "
                              "(load with conform_mesh=True)")
         node = np.asarray(sampler.node_xyz, dtype=np.float64)

@@ -101,7 +101,7 @@ def test_load_flow_conform_toggle(tmp_path):
     assert conformed._sampler.ok                             # fast path enabled
 
     raw = mt.load_flow(path, active_key="Velocity", conform_mesh=False)
-    assert not raw._sampler.ok                               # hybrid -> fallback
+    assert raw._sampler.ok                                   # native VTK sampler
     velocity, valid, cells = raw.sample_v(np.array([[0.1, 0.1, 0.1]]), 0.0005)
     assert valid.tolist() == [True]
     assert cells is None

@@ -39,10 +39,24 @@ Pass `mesh_mode` when the layout is known:
   at frame `N // 2`.
 - `"changing_topology"` loads each frame's geometry.
 
-The fast sampler is used for tetrahedral cells. Other cell types use PyVista's
-fallback sampler unless `conform_mesh=True` can condition them to tetrahedra.
+The fast cell-walking sampler is used for tetrahedral cells. By default,
+`conform_mesh=True` splits supported non-tetrahedral cells into tetrahedra.
+For native hexes, wedges, or mixed cells on static geometry, pass
+`conform_mesh=False`: one VTK cell locator is built and reused for every query,
+including all RK4 stages and boundary reseeding. Interpolation uses the original
+cell shape functions, and velocity may still vary with time. Moving non-tet
+geometry continues to use PyVista's fallback sampler.
 Velocity must be a three-component point-data field with a consistent name
 (matching is case-insensitive).
+
+A single `.vtu` with one velocity array (`Velocity_00000` or `Velocity`) is
+treated as a steady field at all query times. It has no finite flow period;
+pass an explicit `tmax` to `track` or `track_parallel`:
+
+```python
+flow = mt.load_flow("single_timestep.vtu", active_key="Velocity", conform_mesh=False)
+result = mt.track(flow, seeds=seeds, inlet=reset_points, dt=0.0001, tmax=0.02)
+```
 
 Pass `reverse_velocity=True` to `load_flow` to negate `(vx, vy, vz)` before the
 field is sampled, tracked, used for reseeding, or exported as a velocity image.

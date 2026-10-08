@@ -1,7 +1,11 @@
 import numpy as np
 import pyvista as pv
 
-from vtkmodules.vtkCommonDataModel import vtkCellTreeLocator
+from vtkmodules.vtkCommonDataModel import (
+    vtkCellLocatorStrategy,
+    vtkCellTreeLocator,
+    vtkStaticCellLocator,
+)
 from vtkmodules.vtkFiltersCore import vtkProbeFilter
 
 try:
@@ -317,6 +321,55 @@ def _condition_mesh(mesh, verbose=True):
         print(f"[mrsimtracks] mesh conditioning: {'; '.join(parts)} "
               f"({mesh.n_cells} -> {out.n_cells} cells)")
     return out
+
+
+class _VTKSampler:
+    """Native-cell sampling on fixed geometry with one prebuilt VTK locator."""
+
+    ok = True
+
+    def __init__(self, mesh, dtype=np.float64):
+        self.dtype = np.dtype(dtype)
+        self._mesh = pv.UnstructuredGrid()
+        self._mesh.copy_structure(mesh)
+        self._mesh.cell_data["cid"] = np.arange(mesh.n_cells, dtype=np.int64)
+
+        self.locator = vtkStaticCellLocator()
+        self.locator.SetDataSet(self._mesh)
+        self.locator.BuildLocator()
+        # Only point fields change. Do not rebuild the search structure when
+        # those changes advance the source dataset's modification time.
+        self.locator.UseExistingSearchStructureOn()
+        strategy = vtkCellLocatorStrategy()
+        strategy.SetCellLocator(self.locator)
+        self._probe = vtkProbeFilter()
+        self._probe.SetSourceData(self._mesh)
+        # PyVista's sample(locator=...) supplies a prototype, which VTK clones.
+        # A strategy binds the probe to the actual prebuilt locator instead.
+        self._probe.SetFindCellStrategy(strategy)
+        self._probe.SetPassCellArrays(False)
+        self._probe.SetPassPointArrays(False)
+        self._probe.SetPassFieldArrays(False)
+
+    def _probe_points(self, points_xyz):
+        points_xyz = np.ascontiguousarray(points_xyz, dtype=self.dtype)
+        self._probe.SetInputData(pv.PolyData(points_xyz))
+        self._probe.Update()
+        return pv.wrap(self._probe.GetOutput())
+
+    def locate(self, points_xyz, guess=None):
+        sampled = self._probe_points(points_xyz)
+        valid = np.asarray(sampled.point_data["vtkValidPointMask"], dtype=bool)
+        return np.where(valid, sampled.point_data["cid"], -1)
+
+    def sample(self, points_xyz, vel, guess=None):
+        self._mesh.point_data["velocity"] = np.ascontiguousarray(vel, dtype=self.dtype)
+        sampled = self._probe_points(points_xyz)
+        valid = np.asarray(sampled.point_data["vtkValidPointMask"], dtype=bool)
+        velocity = np.asarray(sampled.point_data["velocity"]).copy()
+        velocity[~valid] = 0
+        # This path always queries the locator; it never carries walk guesses.
+        return velocity, valid, None
 
 
 class _TetSampler:

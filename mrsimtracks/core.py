@@ -162,6 +162,8 @@ def _step_count(tmax, dt):
     """Floor ``tmax / dt`` without dropping an almost-integral final step."""
     if dt <= 0:
         raise ValueError("dt must be > 0")
+    if not np.isfinite(tmax):
+        raise ValueError("provide a finite tmax for steady-flow tracking")
     if tmax <= 0:
         raise ValueError("tmax must be > 0")
     ratio = tmax / dt
@@ -404,7 +406,7 @@ def track(flow, seeds=None, dt=1e-3, tmax=None, reseeder=None, inlet=None,
             ``pyvista.PolyData``.
         dt (float): Tracking time step in seconds.
         tmax (float | None): Total tracking duration. Defaults to one flow
-            period.
+            period. Required for a single-frame steady flow.
         reseeder (BoundaryReseeder | None): Boundary reseeder used to recycle
             out-of-bounds particles. If omitted, ``inlet`` must provide static
             reset points.

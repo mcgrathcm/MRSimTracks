@@ -91,7 +91,7 @@ class BoundaryReseeder:
         self.dt = dt
         self.verify = verify
         if not getattr(flow, "_sampler", None) or not flow._sampler.ok:
-            raise ValueError("BoundaryReseeder requires an all-tetrahedral flow mesh")
+            raise ValueError("BoundaryReseeder requires a supported flow sampler")
 
         caps = self._load_caps(caps)
         self.region = np.asarray(caps.cell_data[region_key]).astype(np.int64)
@@ -163,11 +163,7 @@ class BoundaryReseeder:
         self._vn = np.zeros((nframes, self.area.shape[0]))      # signed normal vel
         for k in range(nframes):
             loc = self.flow._frame_runtime(k).sampler
-            cells = loc.locate(np.ascontiguousarray(self._sample_pt), guess=None)
-            valid = cells >= 0
-            cells_safe = np.where(valid, cells, 0)
-            v = loc._interp(self._sample_pt, cells_safe, _frame_velocity(self.flow, k))
-            v[~valid] = 0.0
+            v, _, _ = loc.sample(self._sample_pt, _frame_velocity(self.flow, k))
             self._vn[k] = np.einsum("ij,ij->i", v, self.normal)
 
         inflow = np.maximum(-self._vn, 0.0) * self.area        # q >= 0

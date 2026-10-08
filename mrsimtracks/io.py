@@ -17,7 +17,9 @@ from tqdm.auto import tqdm
 from vtkmodules.vtkCommonDataModel import vtkStaticCellLocator
 
 from .sampler import (
+    VTK_TETRA,
     _TetSampler,
+    _VTKSampler,
     _condition_mesh,
     resolve_float_dtype,
 )
@@ -620,6 +622,8 @@ def _periodic_distinct_count(get_frame, n_frames):
     the opening one; if so it is dropped from the periodic wrap so cubic
     interpolation across the cycle boundary doesn't see a repeated knot.
     """
+    if n_frames == 1:
+        return 1
     f0 = np.asarray(get_frame(0))
     fn = np.asarray(get_frame(n_frames - 1))
     if f0.shape != fn.shape:
@@ -659,6 +663,8 @@ def _interp_time(times_shift_s, tmax, n_distinct, get_frame, time, mode,
 
 def _interp_weights(times_shift_s, tmax, n_distinct, time, mode, tol=1e-3):
     """Frame indices and scalar weights for periodic temporal interpolation."""
+    if len(times_shift_s) == 1:
+        return (0,), (1.0,)
     tw = time % tmax
     inext = int(np.argmax((times_shift_s - tw) > 0))
     iprev = inext - 1
@@ -975,11 +981,9 @@ def _load_single_vtu(path, active_key, *, subsamp, only_active_key, pbar, dtype,
         raise ValueError("subsamp must be >= 1")
     metadata = _read_vtu_metadata(path)
     time_keys = _resolve_point_array(metadata, active_key, suffixed=True)[::subsamp]
-    if len(time_keys) < 2:
-        raise ValueError(
-            f"{path} must contain at least two point-data arrays named "
-            f"{active_key}_NNNNN"
-        )
+    suffixed = bool(time_keys)
+    if not time_keys:
+        time_keys = [(0, _resolve_point_array(metadata, active_key))]
     names = [name for _, name in time_keys]
     mesh = (
         _read_vtu(path, names, pbar)
@@ -988,7 +992,7 @@ def _load_single_vtu(path, active_key, *, subsamp, only_active_key, pbar, dtype,
     )
     if conform_mesh:
         mesh = _condition_mesh(mesh)
-    canonical_key = names[0].rsplit("_", 1)[0]
+    canonical_key = names[0].rsplit("_", 1)[0] if suffixed else names[0]
     fields = []
     for name in names:
         field = np.asarray(mesh.point_data[name])
@@ -1011,7 +1015,7 @@ def _load_single_vtu(path, active_key, *, subsamp, only_active_key, pbar, dtype,
 class _FrameRuntime:
     mesh: pv.UnstructuredGrid
     locator: vtkStaticCellLocator
-    sampler: _TetSampler
+    sampler: _TetSampler | _VTKSampler
 
 
 class Flow:
@@ -1028,7 +1032,7 @@ class Flow:
         self.time_interp = resolve_time_interp(time_interp)
         self.times = np.asarray(data.times)
         self.times_shift_s = np.asarray(times_shift_s, dtype=float)
-        self.tmax = float(self.times_shift_s[-1])
+        self.tmax = float(self.times_shift_s[-1]) if len(self.times) > 1 else np.inf
         if self.tmax <= 0:
             raise ValueError("flow timesteps must be strictly increasing")
         if np.any(np.diff(self.times_shift_s) <= 0):
@@ -1060,10 +1064,15 @@ class Flow:
             self._runtime_cache[key] = runtime
             return runtime
         mesh = self.data.mesh(index)
-        locator = vtkStaticCellLocator()
-        locator.SetDataSet(mesh)
-        locator.BuildLocator()
-        runtime = _FrameRuntime(mesh, locator, _TetSampler(mesh, dtype=self.dtype))
+        if self.geometry_mode == "static" and not np.all(mesh.celltypes == VTK_TETRA):
+            sampler = _VTKSampler(mesh, dtype=self.dtype)
+            locator = sampler.locator
+        else:
+            locator = vtkStaticCellLocator()
+            locator.SetDataSet(mesh)
+            locator.BuildLocator()
+            sampler = _TetSampler(mesh, dtype=self.dtype)
+        runtime = _FrameRuntime(mesh, locator, sampler)
         self._runtime_cache[key] = runtime
         if len(self._runtime_cache) > 4:
             self._runtime_cache.popitem(last=False)
@@ -1224,7 +1233,8 @@ def load_flow(
     Args:
         path: A VTU/PVD path, directory, or iterable of VTU paths.
         active_key: Three-component point-data field name. Matching is
-            case-insensitive; a single VTU expects ``active_key_NNNNN`` arrays.
+            case-insensitive; a single VTU accepts ``active_key_NNNNN`` arrays
+            or one unsuffixed field. One frame is treated as steady flow.
         subsamp: Keep every Nth time frame for every source layout.
         only_active_key: Skip unrelated point arrays in a single multi-field VTU.
         pbar: Show load progress.
@@ -1232,7 +1242,9 @@ def load_flow(
         precision: Working field precision, ``"f64"`` or ``"f32"``.
         time_interp: ``"linear"`` or uniform-grid ``"cubic"`` interpolation.
         conform_mesh: Split supported non-tetrahedral cells and remove
-            degenerate tetrahedra before building the fast sampler.
+            degenerate tetrahedra before building the fast sampler. Set to
+            ``False`` to retain native cells; static non-tetrahedral meshes use
+            one cached VTK locator without cell walking.
         mesh_mode: ``"auto"`` to classify every frame, ``"static"`` to reuse
             the first mesh while checking midpoint coordinates and topology,
             ``"moving"`` to reuse the first connectivity while loading
