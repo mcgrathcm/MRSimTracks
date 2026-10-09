@@ -16,12 +16,14 @@ array (0..n_caps-1), saved to caps_labeled.vtp.
 import numpy as np
 import pyvista as pv
 
-from ..io import load_flow
+from ..io import Flow, load_flow
 
 
 def extract_caps(flow_file, out="caps_labeled.vtp", vmag_thresh=0.5, min_faces=20,
                  active_key="velocity"):
-    flow = load_flow(flow_file, active_key=active_key, only_active_key=True)
+    """Extract caps in source coordinates from a source or loaded Flow."""
+    flow = (flow_file if isinstance(flow_file, Flow)
+            else load_flow(flow_file, active_key=active_key, only_active_key=True))
     full = flow.active_mesh
     surf = full.extract_surface(algorithm="dataset_surface").triangulate()
     orig = surf.point_data["vtkOriginalPointIds"]
@@ -41,6 +43,12 @@ def extract_caps(flow_file, out="caps_labeled.vtp", vmag_thresh=0.5, min_faces=2
     cap_face = cap_node[faces].any(axis=1)
     print(f"{surf.n_cells} boundary faces -> {cap_face.sum()} cap faces "
           f"({cap_node.sum()} cap nodes of {surf.n_points})")
+    if not cap_face.any():
+        raise ValueError(
+            f"no cap faces exceed velocity threshold {vmag_thresh:g}; "
+            f"maximum boundary speed is {vmax.max():g}. "
+            "Lower vmag_thresh or provide cap surfaces."
+        )
 
     # split the cap faces into separate connected patches
     caps = surf.extract_cells(np.where(cap_face)[0]).extract_surface(
@@ -51,6 +59,8 @@ def extract_caps(flow_file, out="caps_labeled.vtp", vmag_thresh=0.5, min_faces=2
     # drop tiny spurious patches, renumber 0..n-1
     keep_ids, counts = np.unique(region, return_counts=True)
     keep_ids = keep_ids[counts >= min_faces]
+    if len(keep_ids) == 0:
+        raise ValueError(f"no cap component contains at least {min_faces} faces")
     mask = np.isin(region, keep_ids)
     caps = caps.extract_cells(np.where(mask)[0]).extract_surface(
         algorithm="dataset_surface")
@@ -59,6 +69,8 @@ def extract_caps(flow_file, out="caps_labeled.vtp", vmag_thresh=0.5, min_faces=2
     caps.cell_data["region_id"] = region.astype(np.int32)
     if "RegionId" in caps.cell_data:
         del caps.cell_data["RegionId"]
+    # Reseeders apply origin_shift when loading caps, including extracted ones.
+    caps.points = np.asarray(caps.points) - flow.origin_shift
 
     area = caps.compute_cell_sizes(length=False, area=True, volume=False).cell_data["Area"]
     cent = caps.cell_centers().points
