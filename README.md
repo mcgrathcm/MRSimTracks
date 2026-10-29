@@ -5,10 +5,10 @@ MR flow simulation.
 
 MRSimTracks performs Lagrangian particle tracking in time-resolved (pulsatile)
 CFD meshes and samples their velocity fields onto Cartesian reference images in
-the mesh coordinate system. It seeds particles in a tetrahedral flow domain,
-advects them through a time-periodic velocity field (RK4), and recycles
-out-of-bounds particles back to the inflow boundaries with optional
-**backflow-aware** reseeding.
+the mesh coordinate system. It seeds particles in a tetrahedral or native-cell
+flow domain, advects them through a steady or time-periodic velocity field
+(RK4), and recycles out-of-bounds particles back to the inflow boundaries with
+optional **backflow-aware** reseeding.
 
 <p align="center">
   <img src="docs/assets/ubend_density_slice.webp" alt="Greyscale center-slice particle animation through the U-bend" width="30%">
@@ -21,13 +21,13 @@ out-of-bounds particles back to the inflow boundaries with optional
 MRSimTracks is published on PyPI:
 
 ```bash
-uv add "mrsimtracks==0.2.0"
+uv add "mrsimtracks==0.3.0"
 ```
 
 or with pip:
 
 ```bash
-python -m pip install "mrsimtracks==0.2.0"
+python -m pip install "mrsimtracks==0.3.0"
 ```
 
 To install the latest source from GitHub instead:
@@ -72,11 +72,37 @@ result = mt.track(
 )
 
 # 5. Use / save
-result.positions      # (n_steps, n_particles, 3)
-result.reset          # (n_steps, n_particles) reseed flags
-result.times          # (n_steps,)
+result.positions      # (n_states, n_particles, 3), starting with seeds at t=0
+result.reset          # (n_states, n_particles), false at t=0
+result.times          # (n_states,), starting at 0
 result.save("tracks.h5")
 ```
+
+For N integration steps, default output contains N+1 states. This changes the
+0.2.x output convention, where the first stored frame followed one integration
+step. `result.n_steps` counts stored states; use `result.times` for their times.
+
+### Native static cells and steady flow
+
+Preserve hexes, wedges, or mixed cells on static geometry with
+`conform_mesh=False`:
+
+```python
+flow = mt.load_flow("hex_case.vtu", active_key="Velocity", conform_mesh=False)
+reseeder = mt.BoundaryReseeder(["Inlet.vtp", "Outlet.vtp"], flow, dt=0.001)
+seeds = seed_mesh(flow.active_mesh, 10_000, rng=np.random.default_rng(0))
+result = mt.track(flow, seeds=seeds, dt=0.001, tmax=0.02, reseeder=reseeder)
+```
+
+One VTK locator is reused for all sampling and reseeding queries, preserving
+native cell interpolation. The geometry must be static for this cached native
+path; velocity can vary with time. A single velocity frame (`Velocity` or
+`Velocity_00000`) is steady and requires an explicit finite `tmax` in `track`
+or `track_parallel`. `WallSlip` requires all-tetrahedral geometry; omit it for
+native non-tet cells. Parallel tracking accepts `conform_mesh=False`, with a
+separate locator in each worker.
+
+### Material motion and streaming
 
 For particles attached to a deforming fixed-topology mesh, load nodal motion
 instead of integrating a velocity field:
@@ -117,9 +143,9 @@ result.is_file_backed  # True until result.positions or result.reset is loaded
 metrics["particle_steps_per_s"]
 ```
 
-`time_subsample=10` stores every tenth integration state. Each stored reset
-flag is true if that particle reset at least once since the previous stored
-state, and the file's `dt` is the resulting stored-state interval.
+`time_subsample=10` stores the initial state and every tenth integration state.
+Each stored reset flag is true if that particle reset at least once since the
+previous stored state, and the file's `dt` is the resulting stored-state interval.
 
 Run `example.py` for a complete version using the reduced fixture committed in
 `tests/data/`. The full-cycle example flow file is tracked with Git LFS; see
@@ -140,11 +166,11 @@ result = mt.track_parallel(
 ## Periodic nearest-neighbor mapping
 
 Generate the 1-based destination-to-source map expected by KomaMRI's periodic
-`FlowPath`. Use the original seeds, because the first stored tracking frame is
-already one integration step after them.
+`FlowPath`. The first stored tracking frame contains the original seeds at
+`t=0` in the result's particle order:
 
 ```python
-cycle_map = mt.periodic_mapping(seeds, result.positions[-1])
+cycle_map = mt.periodic_mapping(result.positions[0], result.positions[-1])
 ```
 
 The mapping is not one-to-one: multiple initial locations can select the same

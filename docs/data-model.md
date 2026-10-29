@@ -8,7 +8,7 @@ ground-truth Cartesian velocity images.
 Supported inputs:
 
 - One `.vtu` with velocity arrays named by timestep, such as
-  `Velocity_00190`.
+  `Velocity_00190`, or a single unsuffixed velocity field for steady flow.
 - A `.pvd` collection with one `.vtu` per frame.
 - A directory or explicit path list containing one `.vtu` per frame. A
   `TimeValue` field is used when present; otherwise the trailing number in each
@@ -48,6 +48,8 @@ cell shape functions, and velocity may still vary with time. Moving non-tet
 geometry continues to use PyVista's fallback sampler.
 Velocity must be a three-component point-data field with a consistent name
 (matching is case-insensitive).
+`WallSlip` requires tetrahedral cells and cannot be used with native non-tet
+geometry. The cached native path does not apply to moving FSI/ALE geometry.
 
 A single `.vtu` with one velocity array (`Velocity_00000` or `Velocity`) is
 treated as a steady field at all query times. It has no finite flow period;
@@ -70,6 +72,26 @@ state and applied to the reference coordinates before any state samplers are
 constructed. Velocity, displacement, and mesh-velocity fields are unchanged.
 With `reverse_velocity=True`, only the physical velocity field is negated;
 displacement and mesh velocity remain unchanged.
+
+## Tracking Output and 0.3 Migration
+
+`TrackingResult.positions` and the HDF5 `position` dataset have shape
+`(n_states, n_particles, 3)`. State zero contains the initial seeds at `t=0`;
+`reset[0]` is false. Subsequent states are separated by the stored `dt`, and
+`result.times` starts at zero. `result.n_steps` counts stored states, including
+the initial state.
+
+For N integration steps, default output has N+1 states. In 0.2.x, output began
+after the first integration step. Update consumers that assumed frame zero
+occurred at `dt`, or that the number of stored states equaled the number of
+integration steps. Existing HDF5 files are not rewritten or detected as legacy
+files; `TrackingResult.open` interprets frame zero as `t=0`.
+
+With `time_subsample=N`, streamed output and `TrackingResult.save` preserve the
+initial state and then save every Nth integration state. A stored reset flag is
+true if the particle reset at least once since the previous stored state, and
+the HDF5 `dt` is the resulting stored-state interval. A final integration state
+is saved only if it falls on the selected stride.
 
 ## Fixed-Topology Mesh Motion
 

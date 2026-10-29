@@ -76,7 +76,7 @@ def track_parallel(path, seeds, dt=1e-3, tmax=None, caps=None, inlet=None,
         seeds (np.ndarray): Initial particle positions as an ``(n, 3)`` array.
         dt (float): Tracking time step in seconds.
         tmax (float | None): Total tracking duration. Defaults to one flow
-            period.
+            period. Required for a single-frame steady flow.
         caps (str | pathlib.Path | list | None): Cap surface path(s) used to
             build a ``BoundaryReseeder`` per worker.
         inlet (np.ndarray | None): Static reset points used when ``caps`` is
@@ -95,7 +95,10 @@ def track_parallel(path, seeds, dt=1e-3, tmax=None, caps=None, inlet=None,
         time_interp (str): Temporal interpolation between frames, ``"linear"``
             (default) or ``"cubic"`` (Catmull-Rom; requires uniform spacing).
         conform_mesh (bool): Condition the mesh to clean all-tet at load (split
-            non-tet cells, drop degenerate cells). Default ``True``.
+            non-tet cells, drop degenerate cells). Default ``True``. Set to
+            ``False`` to preserve native cells on static geometry; each worker
+            reuses its own VTK locator. Native non-tet cells require
+            ``wall_slip=False``.
         mesh_mode (str): Mesh classification policy passed to ``load_flow``.
             Default ``"auto"``.
         center_mesh (bool): Apply the frame-0-based centering translation to

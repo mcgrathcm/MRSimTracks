@@ -258,7 +258,7 @@ class MeshMotion:
         """Evaluate material positions in memory or stream them to HDF5.
 
         Args:
-            pbar: Show a progress bar over the evaluated frames.
+            pbar (bool): Show a progress bar over the evaluated frames.
         """
         stored_frames = times is None
         evaluation_times = (

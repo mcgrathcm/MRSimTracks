@@ -18,6 +18,9 @@ It operates on time-resolved mesh velocity fields. The core tracking workflow is
 - Supports single-file `.vtu` time series, `.pvd` collections, directories, and
   explicit VTU path lists.
 - Uses a fast tetrahedral sampler with temporal-coherence cell walking.
+- Preserves native static hex, wedge, and mixed cells with one reusable VTK
+  locator when `conform_mesh=False`.
+- Supports single-frame steady velocity fields with an explicit tracking duration.
 - Provides flux-weighted, backflow-aware boundary reseeding.
 - Can stream large tracking outputs directly to HDF5.
 - Includes small normal-CI fixtures and full Git LFS release validation.

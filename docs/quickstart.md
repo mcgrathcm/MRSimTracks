@@ -24,9 +24,35 @@ result.save("tracks.h5")
 
 The saved HDF5 file contains:
 
-- `position`: particle positions with shape `(n_steps, n_particles, 3)`
-- `reset`: reset flags with shape `(n_steps, n_particles)`
+- `position`: particle positions with shape `(n_states, n_particles, 3)`
+- `reset`: reset flags with shape `(n_states, n_particles)`
 - `dt`: time step attribute
+
+The first state contains the initial seeds at `t=0`, with all reset flags false.
+For N integration steps, default output has N+1 states. Unlike 0.2.x, the first
+stored state is no longer one step after the seeds. `result.n_steps` counts
+stored states; `result.times` gives their times.
+
+## Native Static Cells and Steady Flow
+
+To retain hexes, wedges, or mixed cells, disable tetrahedral conditioning:
+
+```python
+flow = mt.load_flow("hex_case.vtu", active_key="Velocity", conform_mesh=False)
+reseeder = mt.BoundaryReseeder(["Inlet.vtp", "Outlet.vtp"], flow, dt=0.001)
+seeds = seed_mesh(flow.active_mesh, 10_000, rng=np.random.default_rng(0))
+result = mt.track(flow, seeds=seeds, dt=0.001, tmax=0.02, reseeder=reseeder)
+```
+
+On static geometry, all field queries and boundary reseeding reuse one VTK
+locator and the original cell shape functions. Velocity may vary with time;
+the cached native path does not apply to moving FSI/ALE geometry.
+
+A single velocity array, named `Velocity` or `Velocity_00000`, defines steady
+flow. Pass an explicit finite `tmax` to `track` or `track_parallel` because it
+has no finite flow period. `track_parallel(..., conform_mesh=False)` creates
+one native locator per worker. `WallSlip` requires tetrahedral cells, so omit
+it and leave parallel `wall_slip=False` when preserving native non-tet cells.
 
 ## Streaming Output
 
@@ -48,8 +74,9 @@ result.is_file_backed
 metrics["particle_steps_per_s"]
 ```
 
-With `time_subsample=N`, every Nth integration state is stored, `dt` records
-the stored-state interval, and reset flags are accumulated over each interval.
+With `time_subsample=N`, the initial state and every Nth integration state are
+stored, `dt` records the stored-state interval, and reset flags are accumulated
+over each interval.
 
 ## Parallel Tracking
 

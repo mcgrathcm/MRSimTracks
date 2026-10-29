@@ -6,11 +6,60 @@ This project uses semantic versioning while the public API stabilizes.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-29
+
+### Changed
+
+- Tracking results now include the initial seeds at `t=0`, with false reset
+  flags. For N integration steps, default output contains N+1 states;
+  `TrackingResult.n_steps` counts stored states. Consumers of 0.2.x output must
+  account for the additional initial frame and use `result.times` for timing.
+- Recycle particles at the end-of-step time and retain RK4's final cell guess
+  for the next step. An invalid intermediate RK4 query triggers a reset.
+- Add `time_subsample` to streamed tracking output. Both streaming and
+  `TrackingResult.save` preserve the initial state, accumulate reset flags over
+  skipped steps, and record the stored-state interval in the HDF5 `dt` attribute.
+- Preserve the final integration step when floating-point rounding makes an
+  integral duration/time-step ratio slightly smaller than its integer value.
+
+### Added
+
 - Add `sample_velocity_image` for Cartesian ground-truth velocity images in the
   same native `(x,y,z)` coordinates as particle tracking, with exact piecewise-
   linear temporal averaging, regular subvoxel averaging, occupancy maps, and
   sparse spatial HDF5 storage. Optional extent-based reordering applies the same
   largest-to-smallest permutation to image axes and velocity components.
+- Unify flow loading from single VTUs, PVD collections, directories, and explicit
+  VTU lists. Retain static, moving-node, and topology-changing geometry without
+  storing identical meshes for every frame; expose `mesh_mode` for known layouts.
+- Add `load_mesh_motion` and material-particle trajectories on fixed-topology
+  deforming meshes, with uniform reference-volume seeding, fixed barycentric
+  weights, and streamed HDF5 positions with exact evaluation times.
+- Add `load_ale_flow` and `ALEBoundaryReseeder` for physical-space tracking on
+  displaced reference meshes. Reuse tetrahedral connectivity across deformed
+  states and weight reseeding by current face area and relative inflow velocity.
+- Add `periodic_mapping` with 1-based destination-to-source nearest-neighbor
+  indices for KomaMRI periodic `FlowPath` motion.
+- Add `center_mesh` to flow, ALE, and material-motion loading, using one
+  frame-0-based translation; translate reseeding caps consistently.
+- Add `reverse_velocity` to flow/ALE loading and parallel tracking. ALE mesh
+  velocity and displacement are preserved.
+- Support native hex, wedge, and mixed cells on static geometry with
+  `conform_mesh=False`. Reuse one VTK locator for field sampling and boundary
+  reseeding, preserving native shape functions without tetrahedral cell walking.
+  `WallSlip` continues to require tetrahedral cells.
+- Treat a single velocity frame, including an unsuffixed field, as steady flow.
+  Tracking requires an explicit finite `tmax` for these inputs.
+- Allow the development cap extractor to accept a loaded flow, preserve source
+  cap coordinates for centered flows, and report empty threshold selections or
+  undersized components clearly.
+
+### Release tooling
+
+- Fix the strict API documentation build for material-trajectory progress.
+- Validate both bare version tags and `v`-prefixed tags.
+- Limit source distributions to the package, documentation, and release files
+  so untracked example scripts and local outputs cannot enter release artifacts.
 
 ## [0.2.1] - 2026-08-18
 

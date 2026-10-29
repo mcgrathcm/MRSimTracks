@@ -3,13 +3,13 @@
 MRSimTracks is published on PyPI:
 
 ```bash
-uv add "mrsimtracks==0.2.0"
+uv add "mrsimtracks==0.3.0"
 ```
 
 or with pip:
 
 ```bash
-python -m pip install "mrsimtracks==0.2.0"
+python -m pip install "mrsimtracks==0.3.0"
 ```
 
 To install the latest source from GitHub instead:

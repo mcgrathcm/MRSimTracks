@@ -3,6 +3,9 @@
 Particles that leave the flow domain can be recycled through inlet/outlet cap
 surfaces.
 
+On static native-cell meshes loaded with `conform_mesh=False`,
+`BoundaryReseeder` uses the same cached VTK locator as velocity sampling.
+
 `BoundaryReseeder` computes a time-resolved inflow weight for every cap face:
 
 ```text
